@@ -3,6 +3,8 @@ package netmon
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"os/exec"
 	"time"
 )
@@ -28,12 +30,22 @@ type psProcess struct {
 func (c *Collector) collectPlatform() []Flow {
 	var flows []Flow
 
-	// Collect TCP connections
-	tcpFlows := collectPS("Get-NetTCPConnection | Select-Object LocalAddress,LocalPort,RemoteAddress,RemotePort,State,OwningProcess | ConvertTo-Json -Compress", "tcp")
+	c.logger.Info("Windows collector: running Get-NetTCPConnection...")
+	tcpFlows, tcpErr := collectPS("Get-NetTCPConnection | Select-Object LocalAddress,LocalPort,RemoteAddress,RemotePort,State,OwningProcess | ConvertTo-Json -Compress", "tcp")
+	if tcpErr != nil {
+		c.logger.Warn("Windows collector: TCP collection failed", "err", tcpErr)
+	} else {
+		c.logger.Info("Windows collector: TCP connections", "count", len(tcpFlows))
+	}
 	flows = append(flows, tcpFlows...)
 
-	// Collect UDP endpoints
-	udpFlows := collectPS("Get-NetUDPEndpoint | Select-Object LocalAddress,LocalPort,@{N='RemoteAddress';E={'0.0.0.0'}},@{N='RemotePort';E={0}},@{N='State';E={''}},OwningProcess | ConvertTo-Json -Compress", "udp")
+	c.logger.Info("Windows collector: running Get-NetUDPEndpoint...")
+	udpFlows, udpErr := collectPS("Get-NetUDPEndpoint | Select-Object LocalAddress,LocalPort,@{N='RemoteAddress';E={'0.0.0.0'}},@{N='RemotePort';E={0}},@{N='State';E={''}},OwningProcess | ConvertTo-Json -Compress", "udp")
+	if udpErr != nil {
+		c.logger.Warn("Windows collector: UDP collection failed", "err", udpErr)
+	} else {
+		c.logger.Info("Windows collector: UDP endpoints", "count", len(udpFlows))
+	}
 	flows = append(flows, udpFlows...)
 
 	// Resolve PIDs to process names
@@ -44,19 +56,29 @@ func (c *Collector) collectPlatform() []Flow {
 		}
 	}
 
+	c.logger.Info("Windows collector: total raw flows", "count", len(flows))
 	return flows
 }
 
-func collectPS(script, proto string) []Flow {
+func collectPS(script, proto string) ([]Flow, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	out, err := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", script).Output()
-	if err != nil || len(out) == 0 {
-		return nil
+	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+	out, err := cmd.Output()
+	if err != nil {
+		// Include stderr if available
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return nil, fmt.Errorf("powershell exit %d: %s", exitErr.ExitCode(), string(exitErr.Stderr))
+		}
+		return nil, fmt.Errorf("powershell exec: %w", err)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("powershell returned empty output")
 	}
 
-	return parsePSConnections(out, proto)
+	slog.Debug("PowerShell raw output", "proto", proto, "bytes", len(out))
+	return parsePSConnections(out, proto), nil
 }
 
 func parsePSConnections(data []byte, proto string) []Flow {

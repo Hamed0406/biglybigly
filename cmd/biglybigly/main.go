@@ -206,7 +206,7 @@ func runAgent(ctx context.Context, cancel context.CancelFunc, cfg *config.Config
 	}
 
 	// Start collector
-	collector := netmon.NewCollector()
+	collector := netmon.NewCollectorWithLogger(logger)
 	logger.Info("Agent started — collecting network flows every 30s")
 
 	go func() {

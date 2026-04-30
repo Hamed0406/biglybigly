@@ -3,6 +3,7 @@ package netmon
 import (
 	"context"
 	"database/sql"
+	"log/slog"
 	"net"
 	"strings"
 	"time"
@@ -26,12 +27,21 @@ type Flow struct {
 
 // Collector polls the OS for active connections
 type Collector struct {
-	seen map[string]bool
+	seen   map[string]bool
+	logger *slog.Logger
 }
 
 func NewCollector() *Collector {
 	return &Collector{
-		seen: make(map[string]bool),
+		seen:   make(map[string]bool),
+		logger: slog.Default(),
+	}
+}
+
+func NewCollectorWithLogger(logger *slog.Logger) *Collector {
+	return &Collector{
+		seen:   make(map[string]bool),
+		logger: logger,
 	}
 }
 
@@ -99,12 +109,21 @@ func (c *Collector) collectAndStore(db *sql.DB, agentName string) {
 // collect delegates to the platform-specific collectPlatform() implementation
 func (c *Collector) collect() []Flow {
 	raw := c.collectPlatform()
-	return filterAndEnrich(raw)
+	c.logger.Debug("Platform collector returned", "raw_count", len(raw))
+	filtered := filterAndEnrich(raw)
+	c.logger.Debug("After filtering", "filtered_count", len(filtered))
+	return filtered
 }
 
 // CollectFiltered is the public API for agent mode — collects and filters flows
 func (c *Collector) CollectFiltered() []Flow {
-	return c.collect()
+	flows := c.collect()
+	if len(flows) == 0 {
+		c.logger.Info("Collector: 0 flows after filtering (check platform collector)")
+	} else {
+		c.logger.Info("Collector: flows ready", "count", len(flows))
+	}
+	return flows
 }
 
 // filterAndEnrich removes loopback/unconnected flows and adds reverse DNS
