@@ -22,9 +22,9 @@ data/
 ui/node_modules/
 ui/dist/
 
-# Embedded UI (built from ui/dist)
-internal/core/api/static/assets/
-internal/core/api/static/index.html
+# Embedded UI (built from ui/dist, keep .gitkeep for go:embed)
+internal/core/api/static/*
+!internal/core/api/static/.gitkeep
 
 # Environment
 .env
