@@ -4,8 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: biglybigly
-    ports:
-      - "8082:8082"
+    network_mode: host
     environment:
       BIGLYBIGLY_MODE: server
       BIGLYBIGLY_HTTP_ADDR: :8082

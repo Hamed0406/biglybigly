@@ -162,6 +162,12 @@ func main() {
 
 // runAgent runs the agent mode — collects network data and sends to server
 func runAgent(ctx context.Context, cancel context.CancelFunc, cfg *config.Config, db *sql.DB, logger *slog.Logger) {
+	// Run preflight checks
+	if !agent.RunPreflight(logger) {
+		logger.Error("Required preflight checks failed — cannot start agent")
+		os.Exit(1)
+	}
+
 	serverURL, _ := storage.GetSetting(db, "server_url")
 	agentName, _ := storage.GetSetting(db, "instance_name")
 
@@ -223,6 +229,48 @@ func runAgent(ctx context.Context, cancel context.CancelFunc, cfg *config.Config
 				} else {
 					backoff = 1 * time.Second
 				}
+			}
+		}
+	}()
+
+	// Periodic status display
+	go func() {
+		statusTicker := time.NewTicker(60 * time.Second)
+		defer statusTicker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-statusTicker.C:
+				status := client.Status()
+				totalSent, totalErrors, flowsSent, lastSend, lastErr := client.Stats()
+
+				statusIcon := "●"
+				switch status {
+				case agent.StatusConnected:
+					statusIcon = "🟢"
+				case agent.StatusDisconnected:
+					statusIcon = "🔴"
+				case agent.StatusConnecting:
+					statusIcon = "🟡"
+				}
+
+				sinceLastSend := "never"
+				if !lastSend.IsZero() {
+					sinceLastSend = time.Since(lastSend).Round(time.Second).String() + " ago"
+				}
+
+				logger.Info("──── Agent Status ────────────────────────")
+				logger.Info(fmt.Sprintf("  %s Connection: %s", statusIcon, status))
+				logger.Info(fmt.Sprintf("  Server:     %s", serverURL))
+				logger.Info(fmt.Sprintf("  Batches:    %d sent, %d errors", totalSent, totalErrors))
+				logger.Info(fmt.Sprintf("  Flows:      %d total sent", flowsSent))
+				logger.Info(fmt.Sprintf("  Last send:  %s", sinceLastSend))
+				if lastErr != "" {
+					logger.Info(fmt.Sprintf("  Last error: %s", lastErr))
+				}
+				logger.Info("──────────────────────────────────────────")
 			}
 		}
 	}()
