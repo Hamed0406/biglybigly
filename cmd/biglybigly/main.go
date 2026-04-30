@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -18,10 +19,22 @@ import (
 	"github.com/hamed0406/biglybigly/internal/tools/urlcheck"
 )
 
+// Set via ldflags at build time
+var (
+	version = "dev"
+	commit  = "unknown"
+)
+
 func main() {
 	// Parse flags
 	mode := flag.String("mode", "server", "server or agent")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("biglybigly %s (commit %s)\n", version, commit)
+		os.Exit(0)
+	}
 
 	// Override with env var
 	if envMode := os.Getenv("BIGLYBIGLY_MODE"); envMode != "" {
