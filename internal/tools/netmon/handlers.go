@@ -1,0 +1,228 @@
+package netmon
+
+import (
+	"encoding/json"
+	"net/http"
+	"strconv"
+)
+
+type FlowRow struct {
+	ID         int    `json:"id"`
+	AgentName  string `json:"agent_name"`
+	Proto      string `json:"proto"`
+	LocalIP    string `json:"local_ip"`
+	LocalPort  int    `json:"local_port"`
+	RemoteIP   string `json:"remote_ip"`
+	RemotePort int    `json:"remote_port"`
+	Hostname   string `json:"hostname"`
+	PID        int    `json:"pid"`
+	Process    string `json:"process"`
+	State      string `json:"state"`
+	Count      int    `json:"count"`
+	FirstSeen  int64  `json:"first_seen"`
+	LastSeen   int64  `json:"last_seen"`
+}
+
+type TopEntry struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+
+type StatsResponse struct {
+	TotalFlows   int `json:"total_flows"`
+	TotalHosts   int `json:"total_hosts"`
+	ActiveNow    int `json:"active_now"`
+	UniqueAgents int `json:"unique_agents"`
+}
+
+func (m *Module) handleListFlows(w http.ResponseWriter, r *http.Request) {
+	db := m.p.DB()
+
+	// Query params for filtering
+	agent := r.URL.Query().Get("agent")
+	search := r.URL.Query().Get("search")
+	proto := r.URL.Query().Get("proto")
+	limitStr := r.URL.Query().Get("limit")
+	limit := 200
+	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 1000 {
+		limit = l
+	}
+
+	query := `
+		SELECT id, agent_name, proto, COALESCE(local_ip,''), COALESCE(local_port,0),
+		       remote_ip, remote_port, COALESCE(hostname,''), COALESCE(pid,0),
+		       COALESCE(process,''), COALESCE(state,''), count, first_seen, last_seen
+		FROM netmon_flows
+		WHERE 1=1
+	`
+	var args []interface{}
+
+	if agent != "" {
+		query += " AND agent_name = ?"
+		args = append(args, agent)
+	}
+	if proto != "" {
+		query += " AND proto = ?"
+		args = append(args, proto)
+	}
+	if search != "" {
+		query += " AND (remote_ip LIKE ? OR hostname LIKE ? OR process LIKE ?)"
+		pattern := "%" + search + "%"
+		args = append(args, pattern, pattern, pattern)
+	}
+
+	query += " ORDER BY last_seen DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var flows []FlowRow
+	for rows.Next() {
+		var f FlowRow
+		if err := rows.Scan(&f.ID, &f.AgentName, &f.Proto, &f.LocalIP, &f.LocalPort,
+			&f.RemoteIP, &f.RemotePort, &f.Hostname, &f.PID, &f.Process,
+			&f.State, &f.Count, &f.FirstSeen, &f.LastSeen); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		flows = append(flows, f)
+	}
+
+	if flows == nil {
+		flows = []FlowRow{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(flows)
+}
+
+func (m *Module) handleTopHosts(w http.ResponseWriter, r *http.Request) {
+	db := m.p.DB()
+	limitStr := r.URL.Query().Get("limit")
+	limit := 20
+	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
+		limit = l
+	}
+
+	rows, err := db.Query(`
+		SELECT COALESCE(NULLIF(hostname,''), remote_ip) AS host, SUM(count) AS total
+		FROM netmon_flows
+		GROUP BY host
+		ORDER BY total DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var entries []TopEntry
+	for rows.Next() {
+		var e TopEntry
+		if err := rows.Scan(&e.Name, &e.Count); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		entries = append(entries, e)
+	}
+
+	if entries == nil {
+		entries = []TopEntry{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(entries)
+}
+
+func (m *Module) handleTopPorts(w http.ResponseWriter, r *http.Request) {
+	db := m.p.DB()
+
+	rows, err := db.Query(`
+		SELECT remote_port, SUM(count) AS total
+		FROM netmon_flows
+		GROUP BY remote_port
+		ORDER BY total DESC
+		LIMIT 20
+	`)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	portNames := map[int]string{
+		22: "SSH", 53: "DNS", 80: "HTTP", 443: "HTTPS",
+		993: "IMAPS", 995: "POP3S", 587: "SMTP", 8080: "HTTP-Alt",
+		3306: "MySQL", 5432: "PostgreSQL", 6379: "Redis", 27017: "MongoDB",
+	}
+
+	var entries []TopEntry
+	for rows.Next() {
+		var port, count int
+		if err := rows.Scan(&port, &count); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		name := strconv.Itoa(port)
+		if pn, ok := portNames[port]; ok {
+			name = pn + " (" + strconv.Itoa(port) + ")"
+		}
+		entries = append(entries, TopEntry{Name: name, Count: count})
+	}
+
+	if entries == nil {
+		entries = []TopEntry{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(entries)
+}
+
+func (m *Module) handleStats(w http.ResponseWriter, r *http.Request) {
+	db := m.p.DB()
+	var stats StatsResponse
+
+	db.QueryRow(`SELECT COUNT(*) FROM netmon_flows`).Scan(&stats.TotalFlows)
+	db.QueryRow(`SELECT COUNT(DISTINCT COALESCE(NULLIF(hostname,''), remote_ip)) FROM netmon_flows`).Scan(&stats.TotalHosts)
+	db.QueryRow(`SELECT COUNT(*) FROM netmon_flows WHERE state = 'ESTABLISHED'`).Scan(&stats.ActiveNow)
+	db.QueryRow(`SELECT COUNT(DISTINCT agent_name) FROM netmon_flows`).Scan(&stats.UniqueAgents)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
+}
+
+// handleIngest receives flow data from agents via HTTP (alternative to WebSocket)
+func (m *Module) handleIngest(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		Agent string `json:"agent"`
+		Flows []Flow `json:"flows"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	if payload.Agent == "" {
+		payload.Agent = "remote"
+	}
+
+	db := m.p.DB()
+	for _, f := range payload.Flows {
+		db.Exec(`
+			INSERT INTO netmon_flows (agent_name, proto, local_ip, local_port, remote_ip, remote_port, hostname, pid, process, state, count, first_seen, last_seen)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+			ON CONFLICT(agent_name, proto, remote_ip, remote_port)
+			DO UPDATE SET count = count + 1, last_seen = ?, state = ?,
+				hostname = COALESCE(NULLIF(excluded.hostname,''), hostname),
+				process = COALESCE(NULLIF(excluded.process,''), process)
+		`, payload.Agent, f.Proto, f.LocalIP, f.LocalPort, f.RemoteIP, f.RemotePort,
+			f.Hostname, f.PID, f.Process, f.State, f.SeenAt, f.SeenAt, f.SeenAt, f.State)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]int{"ingested": len(payload.Flows)})
+}

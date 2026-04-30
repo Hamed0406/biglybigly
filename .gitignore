@@ -1,0 +1,53 @@
+# Binaries
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go
+*.test
+*.out
+vendor/
+
+# Database
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+data/
+
+# UI
+ui/node_modules/
+ui/dist/
+
+# Embedded UI (built from ui/dist)
+internal/core/api/static/assets/
+internal/core/api/static/index.html
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml
+
+# Temp
+tmp/
+*.log 
+
+BUILD_INFO.md
+CROSS-PLATFORM.md

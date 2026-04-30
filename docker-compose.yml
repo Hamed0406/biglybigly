@@ -1,0 +1,20 @@
+services:
+  biglybigly:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: biglybigly
+    ports:
+      - "8082:8082"
+    environment:
+      BIGLYBIGLY_MODE: server
+      BIGLYBIGLY_HTTP_ADDR: :8082
+      BIGLYBIGLY_BASE_URL: http://localhost:8082
+      # Optional: Enable specific OAuth providers (uncomment as needed)
+      # BIGLYBIGLY_GOOGLE_CLIENT_ID: your_google_client_id
+      # BIGLYBIGLY_GOOGLE_CLIENT_SECRET: your_google_client_secret
+      # BIGLYBIGLY_GITHUB_CLIENT_ID: your_github_client_id
+      # BIGLYBIGLY_GITHUB_CLIENT_SECRET: your_github_client_secret
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
