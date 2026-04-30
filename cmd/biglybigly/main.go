@@ -145,6 +145,11 @@ func main() {
 		}
 	}()
 
+	// Log registered module routes
+	for _, mod := range modules {
+		logger.Info("Module loaded", "id", mod.ID(), "version", mod.Version(), "routes_active", setupComplete)
+	}
+
 	// Wait for interrupt signal
 	sigch := make(chan os.Signal, 1)
 	signal.Notify(sigch, os.Interrupt, syscall.SIGTERM)

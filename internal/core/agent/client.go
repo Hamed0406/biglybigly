@@ -105,16 +105,28 @@ func (c *Client) SendFlows(ctx context.Context, flows interface{}) error {
 		c.totalErrors++
 		c.lastError = err.Error()
 		c.mu.Unlock()
+		c.logger.Warn("SendFlows: network error", "url", url, "err", err)
 		return fmt.Errorf("send: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		// Read response body for error details
+		var errBody []byte
+		errBody = make([]byte, 512)
+		n, _ := resp.Body.Read(errBody)
+		errDetail := string(errBody[:n])
+
 		c.mu.Lock()
 		c.status = StatusDisconnected
 		c.totalErrors++
-		c.lastError = fmt.Sprintf("server returned %d", resp.StatusCode)
+		c.lastError = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, errDetail)
 		c.mu.Unlock()
+		c.logger.Warn("SendFlows: server rejected",
+			"status", resp.StatusCode,
+			"url", url,
+			"response", errDetail,
+		)
 		return fmt.Errorf("server returned %d", resp.StatusCode)
 	}
 
@@ -135,8 +147,9 @@ func (c *Client) SendFlows(ctx context.Context, flows interface{}) error {
 	return nil
 }
 
-// Ping checks connectivity to the server
+// Ping checks connectivity to the server by testing the ingest endpoint
 func (c *Client) Ping(ctx context.Context) error {
+	// First check basic server reachability
 	url := fmt.Sprintf("%s/api/modules", c.serverURL)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -147,10 +160,39 @@ func (c *Client) Ping(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("cannot reach server at %s: %w", c.serverURL, err)
 	}
-	defer resp.Body.Close()
+	resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server returned %d", resp.StatusCode)
+		return fmt.Errorf("server returned %d for /api/modules", resp.StatusCode)
 	}
+	c.logger.Info("Server reachable", "url", c.serverURL)
+
+	// Now test the ingest endpoint is actually registered
+	ingestURL := fmt.Sprintf("%s/api/netmon/ingest", c.serverURL)
+	testPayload := []byte(`{"agent":"ping-test","flows":[]}`)
+	req2, err := http.NewRequestWithContext(ctx, "POST", ingestURL, bytes.NewReader(testPayload))
+	if err != nil {
+		return err
+	}
+	req2.Header.Set("Content-Type", "application/json")
+	if c.agentToken != "" {
+		req2.Header.Set("Authorization", "Bearer "+c.agentToken)
+	}
+
+	resp2, err := c.httpClient.Do(req2)
+	if err != nil {
+		return fmt.Errorf("ingest endpoint unreachable: %w", err)
+	}
+	resp2.Body.Close()
+
+	if resp2.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("ingest endpoint returned 404 — server modules may not be started (check setup)")
+	}
+	if resp2.StatusCode != http.StatusOK {
+		return fmt.Errorf("ingest endpoint returned %d", resp2.StatusCode)
+	}
+
+	c.logger.Info("Ingest endpoint OK", "url", ingestURL)
+	c.setStatus(StatusConnected)
 	return nil
 }

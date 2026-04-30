@@ -33,6 +33,19 @@ func GenerateBootstrapToken() string {
 func NewServer(plat platform.Platform, registry *platform.Registry, bootstrapToken string) http.Handler {
 	mux := plat.Mux()
 	db := plat.DB()
+	logger := plat.Log()
+
+	// Request logging middleware wraps the mux
+	loggedMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			logger.Info("API request",
+				"method", r.Method,
+				"path", r.URL.Path,
+				"remote_addr", r.RemoteAddr,
+			)
+		}
+		mux.ServeHTTP(w, r)
+	})
 
 	// --- Setup API (no auth required, protected by bootstrap token) ---
 
@@ -163,5 +176,5 @@ func NewServer(plat platform.Platform, registry *platform.Registry, bootstrapTok
 		w.Write(data)
 	})
 
-	return mux
+	return loggedMux
 }

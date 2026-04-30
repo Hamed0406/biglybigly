@@ -196,12 +196,19 @@ func (m *Module) handleStats(w http.ResponseWriter, r *http.Request) {
 
 // handleIngest receives flow data from agents via HTTP (alternative to WebSocket)
 func (m *Module) handleIngest(w http.ResponseWriter, r *http.Request) {
+	logger := m.p.Log()
+	logger.Info("Ingest request received",
+		"remote_addr", r.RemoteAddr,
+		"content_length", r.ContentLength,
+	)
+
 	var payload struct {
 		Agent string `json:"agent"`
 		Flows []Flow `json:"flows"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		logger.Warn("Ingest: invalid JSON body", "err", err, "remote_addr", r.RemoteAddr)
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
@@ -210,9 +217,17 @@ func (m *Module) handleIngest(w http.ResponseWriter, r *http.Request) {
 		payload.Agent = "remote"
 	}
 
+	logger.Info("Ingest: processing flows",
+		"agent", payload.Agent,
+		"flow_count", len(payload.Flows),
+		"remote_addr", r.RemoteAddr,
+	)
+
 	db := m.p.DB()
+	ingested := 0
+	errors := 0
 	for _, f := range payload.Flows {
-		db.Exec(`
+		_, err := db.Exec(`
 			INSERT INTO netmon_flows (agent_name, proto, local_ip, local_port, remote_ip, remote_port, hostname, pid, process, state, count, first_seen, last_seen)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
 			ON CONFLICT(agent_name, proto, remote_ip, remote_port)
@@ -221,8 +236,24 @@ func (m *Module) handleIngest(w http.ResponseWriter, r *http.Request) {
 				process = COALESCE(NULLIF(excluded.process,''), process)
 		`, payload.Agent, f.Proto, f.LocalIP, f.LocalPort, f.RemoteIP, f.RemotePort,
 			f.Hostname, f.PID, f.Process, f.State, f.SeenAt, f.SeenAt, f.SeenAt, f.State)
+		if err != nil {
+			logger.Warn("Ingest: DB insert failed",
+				"agent", payload.Agent,
+				"remote_ip", f.RemoteIP,
+				"err", err,
+			)
+			errors++
+		} else {
+			ingested++
+		}
 	}
 
+	logger.Info("Ingest: complete",
+		"agent", payload.Agent,
+		"ingested", ingested,
+		"errors", errors,
+	)
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]int{"ingested": len(payload.Flows)})
+	json.NewEncoder(w).Encode(map[string]int{"ingested": ingested, "errors": errors})
 }

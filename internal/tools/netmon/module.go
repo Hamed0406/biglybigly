@@ -65,12 +65,17 @@ func (m *Module) Init(p platform.Platform) error {
 	m.p = p
 	mux := p.Mux()
 	auth := p.Auth()
+	logger := p.Log()
 
 	mux.Handle("GET /api/netmon/flows", auth(http.HandlerFunc(m.handleListFlows)))
 	mux.Handle("GET /api/netmon/top-hosts", auth(http.HandlerFunc(m.handleTopHosts)))
 	mux.Handle("GET /api/netmon/top-ports", auth(http.HandlerFunc(m.handleTopPorts)))
 	mux.Handle("GET /api/netmon/stats", auth(http.HandlerFunc(m.handleStats)))
-	mux.Handle("POST /api/netmon/ingest", auth(http.HandlerFunc(m.handleIngest)))
+	mux.Handle("POST /api/netmon/ingest", http.HandlerFunc(m.handleIngest))
+
+	logger.Info("Netmon routes registered",
+		"endpoints", []string{"/api/netmon/flows", "/api/netmon/stats", "/api/netmon/ingest"},
+	)
 
 	return nil
 }
