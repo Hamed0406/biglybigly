@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -27,20 +29,37 @@ type psProcess struct {
 
 // collectPlatform uses PowerShell Get-NetTCPConnection and Get-NetUDPEndpoint
 // for structured, reliable output on Windows.
+// Falls back to netstat if PowerShell collection returns no TCP connections.
 func (c *Collector) collectPlatform() []Flow {
 	var flows []Flow
 
 	c.logger.Info("Windows collector: running Get-NetTCPConnection...")
 	tcpFlows, tcpErr := collectPS("Get-NetTCPConnection | Select-Object LocalAddress,LocalPort,RemoteAddress,RemotePort,State,OwningProcess | ConvertTo-Json -Compress", "tcp")
 	if tcpErr != nil {
-		c.logger.Warn("Windows collector: TCP collection failed", "err", tcpErr)
+		c.logger.Warn("Windows collector: TCP via PowerShell failed", "err", tcpErr)
 	} else {
-		c.logger.Info("Windows collector: TCP connections", "count", len(tcpFlows))
+		c.logger.Info("Windows collector: TCP connections via PowerShell", "count", len(tcpFlows))
+	}
+
+	// If PowerShell TCP returned nothing, fall back to netstat
+	if len(tcpFlows) == 0 {
+		c.logger.Info("Windows collector: trying netstat fallback...")
+		netstatFlows, netstatErr := collectNetstat()
+		if netstatErr != nil {
+			c.logger.Warn("Windows collector: netstat fallback also failed", "err", netstatErr)
+		} else {
+			c.logger.Info("Windows collector: TCP connections via netstat", "count", len(netstatFlows))
+			tcpFlows = netstatFlows
+		}
+	}
+
+	if len(tcpFlows) == 0 {
+		c.logger.Warn("Windows collector: 0 TCP connections from all methods — try running as Administrator")
 	}
 	flows = append(flows, tcpFlows...)
 
 	c.logger.Info("Windows collector: running Get-NetUDPEndpoint...")
-	udpFlows, udpErr := collectPS("Get-NetUDPEndpoint | Select-Object LocalAddress,LocalPort,@{N='RemoteAddress';E={'0.0.0.0'}},@{N='RemotePort';E={0}},@{N='State';E={''}},OwningProcess | ConvertTo-Json -Compress", "udp")
+	udpFlows, udpErr := collectPS("Get-NetUDPEndpoint | Select-Object LocalAddress,LocalPort,@{N='RemoteAddress';E={'0.0.0.0'}},@{N='RemotePort';E={0}},@{N='State';E={'LISTEN'}},OwningProcess | ConvertTo-Json -Compress", "udp")
 	if udpErr != nil {
 		c.logger.Warn("Windows collector: UDP collection failed", "err", udpErr)
 	} else {
@@ -67,7 +86,6 @@ func collectPS(script, proto string) ([]Flow, error) {
 	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", script)
 	out, err := cmd.Output()
 	if err != nil {
-		// Include stderr if available
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return nil, fmt.Errorf("powershell exit %d: %s", exitErr.ExitCode(), string(exitErr.Stderr))
 		}
@@ -79,6 +97,83 @@ func collectPS(script, proto string) ([]Flow, error) {
 
 	slog.Debug("PowerShell raw output", "proto", proto, "bytes", len(out))
 	return parsePSConnections(out, proto), nil
+}
+
+// collectNetstat falls back to parsing `netstat -ano` output for TCP connections.
+// Works without elevation on all Windows versions.
+func collectNetstat() ([]Flow, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, "netstat", "-ano", "-p", "TCP").Output()
+	if err != nil {
+		return nil, fmt.Errorf("netstat: %w", err)
+	}
+
+	return parseNetstat(string(out)), nil
+}
+
+// parseNetstat parses `netstat -ano -p TCP` output lines like:
+//
+//	TCP    192.168.1.50:54321  142.250.74.46:443  ESTABLISHED  1234
+func parseNetstat(output string) []Flow {
+	var flows []Flow
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "TCP") {
+			continue
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			continue
+		}
+
+		localAddr := fields[1]
+		remoteAddr := fields[2]
+		state := fields[3]
+		pid, _ := strconv.Atoi(fields[4])
+
+		localIP, localPort := splitNetstatAddr(localAddr)
+		remoteIP, remotePort := splitNetstatAddr(remoteAddr)
+
+		flows = append(flows, Flow{
+			Proto:      "tcp",
+			LocalIP:    localIP,
+			LocalPort:  localPort,
+			RemoteIP:   remoteIP,
+			RemotePort: remotePort,
+			State:      mapWindowsState(state),
+			PID:        pid,
+		})
+	}
+	return flows
+}
+
+// splitNetstatAddr splits "192.168.1.50:443" or "[::1]:443" into IP and port
+func splitNetstatAddr(addr string) (string, int) {
+	// Handle IPv6 bracket notation [::1]:port
+	if strings.HasPrefix(addr, "[") {
+		bracket := strings.LastIndex(addr, "]")
+		if bracket == -1 {
+			return addr, 0
+		}
+		ip := addr[1:bracket]
+		portStr := ""
+		if bracket+2 < len(addr) {
+			portStr = addr[bracket+2:]
+		}
+		port, _ := strconv.Atoi(portStr)
+		return ip, port
+	}
+	// IPv4: find last colon
+	lastColon := strings.LastIndex(addr, ":")
+	if lastColon == -1 {
+		return addr, 0
+	}
+	ip := addr[:lastColon]
+	port, _ := strconv.Atoi(addr[lastColon+1:])
+	return ip, port
 }
 
 func parsePSConnections(data []byte, proto string) []Flow {

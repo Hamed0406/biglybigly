@@ -91,3 +91,59 @@ func TestMapWindowsState(t *testing.T) {
 		}
 	}
 }
+
+func TestParseNetstat(t *testing.T) {
+	fixture := `
+Active Connections
+
+  Proto  Local Address          Foreign Address        State           PID
+  TCP    192.168.1.50:54321     142.250.74.46:443      ESTABLISHED     1234
+  TCP    192.168.1.50:54322     20.205.243.166:443     ESTABLISHED     5678
+  TCP    0.0.0.0:8082           0.0.0.0:0              LISTENING       9999
+  TCP    127.0.0.1:49672        127.0.0.1:49673        ESTABLISHED     100
+  TCP    [::1]:49670            [::1]:49671            ESTABLISHED     200
+`
+
+	flows := parseNetstat(fixture)
+	if len(flows) != 5 {
+		t.Fatalf("expected 5 flows, got %d", len(flows))
+	}
+
+	// Check first established connection
+	if flows[0].RemoteIP != "142.250.74.46" || flows[0].RemotePort != 443 {
+		t.Errorf("flow 0: %s:%d, want 142.250.74.46:443", flows[0].RemoteIP, flows[0].RemotePort)
+	}
+	if flows[0].LocalIP != "192.168.1.50" || flows[0].LocalPort != 54321 {
+		t.Errorf("flow 0 local: %s:%d, want 192.168.1.50:54321", flows[0].LocalIP, flows[0].LocalPort)
+	}
+	if flows[0].PID != 1234 {
+		t.Errorf("flow 0 PID: %d, want 1234", flows[0].PID)
+	}
+	if flows[0].Proto != "tcp" {
+		t.Errorf("flow 0 proto: %s, want tcp", flows[0].Proto)
+	}
+
+	// Check IPv6 parsing
+	if flows[4].LocalIP != "::1" || flows[4].LocalPort != 49670 {
+		t.Errorf("flow 4 local: %s:%d, want [::1]:49670", flows[4].LocalIP, flows[4].LocalPort)
+	}
+}
+
+func TestSplitNetstatAddr(t *testing.T) {
+	tests := []struct {
+		addr     string
+		wantIP   string
+		wantPort int
+	}{
+		{"192.168.1.50:443", "192.168.1.50", 443},
+		{"0.0.0.0:8082", "0.0.0.0", 8082},
+		{"[::1]:49670", "::1", 49670},
+		{"[::]:445", "::", 445},
+	}
+	for _, tt := range tests {
+		ip, port := splitNetstatAddr(tt.addr)
+		if ip != tt.wantIP || port != tt.wantPort {
+			t.Errorf("splitNetstatAddr(%q) = (%q, %d), want (%q, %d)", tt.addr, ip, port, tt.wantIP, tt.wantPort)
+		}
+	}
+}

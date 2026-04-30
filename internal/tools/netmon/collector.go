@@ -128,19 +128,25 @@ func (c *Collector) CollectFiltered() []Flow {
 
 // filterAndEnrich removes loopback/unconnected flows and adds reverse DNS
 func filterAndEnrich(flows []Flow) []Flow {
-	var outbound []Flow
+	var result []Flow
 	for _, f := range flows {
-		if f.RemotePort == 0 {
+		// For TCP: skip if no remote connection
+		if f.Proto == "tcp" && f.RemotePort == 0 {
 			continue
 		}
-		if f.RemoteIP == "127.0.0.1" || f.RemoteIP == "::1" || f.RemoteIP == "0.0.0.0" {
+		// Skip loopback and unbound addresses
+		if f.RemoteIP == "127.0.0.1" || f.RemoteIP == "::1" {
+			continue
+		}
+		// For TCP: skip unconnected; for UDP: skip if listening on wildcard with no remote
+		if f.RemoteIP == "0.0.0.0" || f.RemoteIP == "::" {
 			continue
 		}
 		f.Hostname = reverseResolve(f.RemoteIP)
 		f.SeenAt = time.Now().Unix()
-		outbound = append(outbound, f)
+		result = append(result, f)
 	}
-	return outbound
+	return result
 }
 
 // reverseResolve attempts reverse DNS lookup
