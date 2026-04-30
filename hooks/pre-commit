@@ -1,0 +1,30 @@
+#!/bin/sh
+# Pre-commit hook: runs linters and tests before allowing a commit.
+# Install automatically via: make setup-hooks
+# Or manually: cp hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+
+set -e
+
+echo "🔍 Running pre-commit checks..."
+
+# Go checks
+echo "  → go vet"
+go vet ./...
+
+echo "  → go build"
+go build ./...
+
+echo "  → go test"
+go test ./... -count=1 -short
+
+# UI checks (only if ui/ files changed)
+STAGED_UI=$(git diff --cached --name-only -- 'ui/src/' 'ui/package.json' 'ui/tsconfig.json' 2>/dev/null || true)
+if [ -n "$STAGED_UI" ]; then
+  echo "  → npm run lint (ui)"
+  cd ui && npm run lint && cd ..
+
+  echo "  → npm run build (ui)"
+  cd ui && npm run build && cd ..
+fi
+
+echo "✅ All pre-commit checks passed"

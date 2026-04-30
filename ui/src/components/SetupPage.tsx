@@ -1,11 +1,4 @@
-import { useState, useEffect } from 'react'
-
-interface SetupStatus {
-  setup_complete: boolean
-  mode: string
-  server_url: string
-  instance_name: string
-}
+import { useState } from 'react'
 
 interface SetupPageProps {
   onComplete: () => void

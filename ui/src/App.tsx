@@ -19,6 +19,7 @@ export default function App() {
 
   useEffect(() => {
     checkSetup()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const checkSetup = async () => {

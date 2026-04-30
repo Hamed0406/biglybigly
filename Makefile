@@ -1,4 +1,4 @@
-.PHONY: build build-all clean test lint run dev
+.PHONY: build build-all clean test lint run dev setup-hooks
 
 # Build for current platform
 build:
@@ -39,3 +39,9 @@ dev-ui:
 # Clean
 clean:
 	rm -rf dist/
+
+# Install git hooks
+setup-hooks:
+	cp hooks/pre-commit .git/hooks/pre-commit
+	chmod +x .git/hooks/pre-commit
+	@echo "✓ Pre-commit hook installed"
