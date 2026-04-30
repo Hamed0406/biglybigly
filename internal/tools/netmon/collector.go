@@ -102,6 +102,11 @@ func (c *Collector) collect() []Flow {
 	return filterAndEnrich(raw)
 }
 
+// CollectFiltered is the public API for agent mode — collects and filters flows
+func (c *Collector) CollectFiltered() []Flow {
+	return c.collect()
+}
+
 // filterAndEnrich removes loopback/unconnected flows and adds reverse DNS
 func filterAndEnrich(flows []Flow) []Flow {
 	var outbound []Flow

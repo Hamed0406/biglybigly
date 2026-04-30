@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hamed0406/biglybigly/internal/core/agent"
 	"github.com/hamed0406/biglybigly/internal/core/api"
 	"github.com/hamed0406/biglybigly/internal/core/config"
 	"github.com/hamed0406/biglybigly/internal/core/storage"
@@ -64,11 +66,32 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Check if setup is complete; if so, use DB mode (env var overrides)
+	setupComplete := storage.IsSetupComplete(db)
+	if setupComplete && *mode == "server" {
+		if dbMode, _ := storage.GetSetting(db, "mode"); dbMode != "" {
+			*mode = dbMode
+		}
+	}
+
+	// Generate bootstrap token for first-run setup security
+	bootstrapToken := ""
+	if !setupComplete {
+		bootstrapToken = api.GenerateBootstrapToken()
+		logger.Info("══════════════════════════════════════════════════")
+		logger.Info("  FIRST RUN — Setup required")
+		logger.Info("  Open your browser and complete setup at:")
+		logger.Info(fmt.Sprintf("  http://localhost%s", cfg.HTTPAddr))
+		logger.Info("")
+		logger.Info(fmt.Sprintf("  Bootstrap token: %s", bootstrapToken))
+		logger.Info("  (required to complete setup)")
+		logger.Info("══════════════════════════════════════════════════")
+	}
+
 	// Register modules
 	modules := []platform.Module{
 		urlcheck.New(),
 		netmon.New(),
-		// Add more modules here
 	}
 
 	// Create registry
@@ -88,14 +111,24 @@ func main() {
 	moduleCtx, moduleCancel := context.WithCancel(context.Background())
 	defer moduleCancel()
 
-	// Start modules
-	if err := registry.Start(moduleCtx, plat); err != nil {
-		logger.Error("Failed to start modules", "err", err)
-		os.Exit(1)
+	// Branch based on mode
+	if *mode == "agent" {
+		runAgent(moduleCtx, moduleCancel, cfg, db, logger)
+		return
+	}
+
+	// --- Server Mode ---
+
+	// Only start modules if setup is complete
+	if setupComplete {
+		if err := registry.Start(moduleCtx, plat); err != nil {
+			logger.Error("Failed to start modules", "err", err)
+			os.Exit(1)
+		}
 	}
 
 	// Create HTTP server
-	apiHandler := api.NewServer(plat, registry)
+	apiHandler := api.NewServer(plat, registry, bootstrapToken)
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           apiHandler,
@@ -103,7 +136,7 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	logger.Info("Starting Biglybigly", "addr", cfg.HTTPAddr, "mode", *mode)
+	logger.Info("Starting Biglybigly", "addr", cfg.HTTPAddr, "mode", *mode, "setup_complete", setupComplete)
 
 	// Start server in goroutine
 	go func() {
@@ -125,4 +158,80 @@ func main() {
 	if err := srv.Shutdown(shutCtx); err != nil {
 		logger.Error("Shutdown error", "err", err)
 	}
+}
+
+// runAgent runs the agent mode — collects network data and sends to server
+func runAgent(ctx context.Context, cancel context.CancelFunc, cfg *config.Config, db *sql.DB, logger *slog.Logger) {
+	serverURL, _ := storage.GetSetting(db, "server_url")
+	agentName, _ := storage.GetSetting(db, "instance_name")
+
+	// Env vars override DB settings
+	if env := os.Getenv("BIGLYBIGLY_SERVER_URL"); env != "" {
+		serverURL = env
+	}
+	if env := os.Getenv("BIGLYBIGLY_AGENT_NAME"); env != "" {
+		agentName = env
+	}
+	agentToken := os.Getenv("BIGLYBIGLY_AGENT_TOKEN")
+
+	if serverURL == "" {
+		logger.Error("Agent mode requires BIGLYBIGLY_SERVER_URL or setup via web UI")
+		os.Exit(1)
+	}
+	if agentName == "" {
+		hostname, _ := os.Hostname()
+		agentName = hostname
+	}
+
+	client := agent.NewClient(serverURL, agentName, agentToken, logger)
+
+	// Test connectivity
+	logger.Info("Agent mode — connecting to server", "server", serverURL, "agent_name", agentName)
+	if err := client.Ping(ctx); err != nil {
+		logger.Error("Cannot reach server", "err", err)
+		logger.Info("Will retry in the background...")
+	} else {
+		logger.Info("Server connection OK")
+	}
+
+	// Start collector
+	collector := netmon.NewCollector()
+	logger.Info("Agent started — collecting network flows every 30s")
+
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+
+		// Exponential backoff for retries
+		backoff := 1 * time.Second
+		maxBackoff := 60 * time.Second
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				flows := collector.CollectFiltered()
+				if len(flows) == 0 {
+					continue
+				}
+				logger.Info("Collected flows", "count", len(flows))
+
+				if err := client.SendFlows(ctx, flows); err != nil {
+					logger.Warn("Failed to send flows", "err", err, "retry_in", backoff)
+					backoff = min(backoff*2, maxBackoff)
+				} else {
+					backoff = 1 * time.Second
+				}
+			}
+		}
+	}()
+
+	// Wait for interrupt
+	sigch := make(chan os.Signal, 1)
+	signal.Notify(sigch, os.Interrupt, syscall.SIGTERM)
+	<-sigch
+
+	logger.Info("Agent shutting down...")
+	cancel()
 }
