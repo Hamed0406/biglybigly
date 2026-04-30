@@ -1,9 +1,8 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  release:
+    types: [published]
 
 permissions:
   contents: write
@@ -60,9 +59,18 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
-      - name: Build
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Build UI
+        run: cd ui && npm ci && npm run build
+      - name: Copy UI assets
+        run: cp -r ui/dist/* internal/core/api/static/
+      - name: Build binary
         run: |
-          VERSION=${{ github.ref_name }}
+          VERSION=${{ github.event.release.tag_name }}
           COMMIT=$(git rev-parse --short HEAD)
           go build \
             -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" \
@@ -77,8 +85,8 @@ jobs:
           name: biglybigly-${{ matrix.name }}
           path: dist/biglybigly-${{ matrix.name }}${{ matrix.ext }}
 
-  # Create GitHub release with checksums
-  create-release:
+  # Upload binaries and checksums to the release
+  upload-assets:
     needs: build-release
     runs-on: ubuntu-latest
     steps:
@@ -91,15 +99,15 @@ jobs:
           mkdir -p release
           find artifacts -type f | while read f; do cp "$f" release/; done
           cd release && sha256sum * > checksums-sha256.txt
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: release/*
-          generate_release_notes: true
-          draft: false
-          prerelease: false
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload ${{ github.event.release.tag_name }} release/* \
+            --repo ${{ github.repository }} --clobber
 
-  # Build and push multi-arch Docker images
-  docker-build:
+  # Build and push multi-arch Docker image to GitHub Packages (GHCR)
+  docker-publish:
     needs: test
     runs-on: ubuntu-latest
     steps:
@@ -117,9 +125,9 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}},value=${{ github.event.release.tag_name }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ github.event.release.tag_name }}
+            type=raw,value=latest
       - uses: docker/build-push-action@v6
         with:
           context: .
