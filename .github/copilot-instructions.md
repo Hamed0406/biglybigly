@@ -177,6 +177,22 @@ Review `SECURITY.md` before submitting changes. Notable issues:
 - Use shared `ui/src/api/client.ts` for platform-level endpoints
 - Types are in `ui/src/types.ts` (TypeScript mirrors of Go JSON structs)
 
+## Existing Modules
+
+### Network Monitor (`netmon`)
+- Passive connection monitoring via `/proc/net/tcp*` and `/proc/net/udp*` (Linux)
+- Deduplicates flows by `(agent, proto, remote_ip, remote_port)` with counters
+- Reverse DNS resolution and best-effort process identification
+- Agent-capable: collects on remote hosts, sends to server
+- Tables: `netmon_flows`, `netmon_dns_cache`
+- Routes: `/api/netmon/flows`, `/api/netmon/top-hosts`, `/api/netmon/top-ports`, `/api/netmon/stats`, `/api/netmon/ingest`
+
+### URL Monitor (`urlcheck`)
+- Add URLs, check availability via HTTP HEAD
+- Tracks status codes, response times, check history
+- Tables: `urlcheck_urls`, `urlcheck_history`
+- Routes: `/api/urlcheck/urls`, `/api/urlcheck/check/{id}`, `/api/urlcheck/history/{id}`
+
 ## Common Tasks
 
 ### Add a New Module
