@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -39,7 +40,7 @@ type Client struct {
 
 func NewClient(serverURL, agentName, agentToken string, logger *slog.Logger) *Client {
 	return &Client{
-		serverURL:  serverURL,
+		serverURL:  strings.TrimRight(serverURL, "/"),
 		agentName:  agentName,
 		agentToken: agentToken,
 		logger:     logger,
