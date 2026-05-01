@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { getFlows, getTopHosts, getTopPorts, getStats, getAgents, getGraph, Flow, TopEntry, Stats, AgentInfo, GraphData } from './api';
+import { getFlows, getTopHosts, getTopPorts, getStats, getAgents, getGraph, getHostnames, getHostnameStats, Flow, TopEntry, Stats, AgentInfo, GraphData, HostnameRecord, HostnameStats as HStats } from './api';
 import NetworkMap from './NetworkMap';
 
 export default function NetMonPage() {
@@ -9,10 +9,13 @@ export default function NetMonPage() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], edges: [] });
+  const [hostnames, setHostnames] = useState<HostnameRecord[]>([]);
+  const [hostnameStats, setHostnameStats] = useState<HStats | null>(null);
   const [selectedAgent, setSelectedAgent] = useState('');
   const [search, setSearch] = useState('');
   const [proto, setProto] = useState('');
-  const [tab, setTab] = useState<'flows' | 'hosts' | 'ports' | 'map'>('flows');
+  const [hostnameSearch, setHostnameSearch] = useState('');
+  const [tab, setTab] = useState<'flows' | 'hosts' | 'ports' | 'map' | 'hostnames'>('flows');
   const [loading, setLoading] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
 
@@ -20,13 +23,15 @@ export default function NetMonPage() {
     setLoading(true);
     try {
       const agent = selectedAgent || undefined;
-      const [f, h, p, s, a, gr] = await Promise.all([
+      const [f, h, p, s, a, gr, hn, hs] = await Promise.all([
         getFlows({ search, proto: proto || undefined, agent, limit: 200 }),
         getTopHosts(20, agent),
         getTopPorts(agent),
         getStats(agent),
         getAgents(),
         getGraph(agent),
+        getHostnames({ agent, search: hostnameSearch || undefined }),
+        getHostnameStats(agent),
       ]);
       setFlows(f);
       setTopHosts(h);
@@ -34,12 +39,14 @@ export default function NetMonPage() {
       setStats(s);
       setAgents(a);
       setGraphData(gr);
+      setHostnames(hn);
+      setHostnameStats(hs);
     } catch (err) {
       console.error('Failed to load data:', err);
     } finally {
       setLoading(false);
     }
-  }, [search, proto, selectedAgent]);
+  }, [search, proto, selectedAgent, hostnameSearch]);
 
   useEffect(() => {
     loadData();
@@ -160,7 +167,7 @@ export default function NetMonPage() {
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '16px' }}>
-        {(['flows', 'hosts', 'ports', 'map'] as const).map((t) => (
+        {(['flows', 'hosts', 'ports', 'map', 'hostnames'] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -170,7 +177,7 @@ export default function NetMonPage() {
               color: tab === t ? 'white' : '#374151', fontWeight: tab === t ? 'bold' : 'normal',
             }}
           >
-            {t === 'flows' ? 'Connections' : t === 'hosts' ? 'Top Hosts' : t === 'ports' ? 'Top Ports' : '🗺 Map'}
+            {t === 'flows' ? 'Connections' : t === 'hosts' ? 'Top Hosts' : t === 'ports' ? 'Top Ports' : t === 'map' ? '🗺 Map' : '🔍 Hostnames'}
           </button>
         ))}
       </div>
@@ -342,6 +349,84 @@ export default function NetMonPage() {
               No connection data yet. Wait for agents to report flows.
             </div>
           )}
+        </div>
+      )}
+
+      {/* Hostnames tab */}
+      {tab === 'hostnames' && (
+        <div>
+          {/* Hostname stats cards */}
+          {hostnameStats && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '16px' }}>
+              {[
+                { label: 'Total Mappings', value: hostnameStats.total_mappings, color: '#8b5cf6' },
+                { label: 'Unique IPs', value: hostnameStats.unique_ips, color: '#3b82f6' },
+                { label: 'Unique Hostnames', value: hostnameStats.unique_names, color: '#22c55e' },
+                { label: 'New Today', value: hostnameStats.new_today, color: '#f59e0b' },
+              ].map((card) => (
+                <div
+                  key={card.label}
+                  style={{
+                    backgroundColor: 'white', borderRadius: '8px', padding: '16px',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+                  }}
+                >
+                  <div style={{ fontSize: '13px', color: '#6b7280' }}>{card.label}</div>
+                  <div style={{ fontSize: '28px', fontWeight: 'bold', color: card.color }}>{card.value}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ backgroundColor: 'white', borderRadius: '8px', padding: '16px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+            <div style={{ display: 'flex', gap: '10px', marginBottom: '16px' }}>
+              <input
+                type="text"
+                placeholder="Search IP or hostname..."
+                value={hostnameSearch}
+                onChange={(e) => setHostnameSearch(e.target.value)}
+                style={{ flex: 1, padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: '4px' }}
+              />
+            </div>
+
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                <thead>
+                  <tr style={{ borderBottom: '2px solid #e5e7eb', textAlign: 'left' }}>
+                    <th style={{ padding: '8px 6px' }}>IP Address</th>
+                    <th style={{ padding: '8px 6px' }}>Hostname</th>
+                    <th style={{ padding: '8px 6px' }}>Agent</th>
+                    <th style={{ padding: '8px 6px' }}>Times Seen</th>
+                    <th style={{ padding: '8px 6px' }}>First Seen</th>
+                    <th style={{ padding: '8px 6px' }}>Last Seen</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {hostnames.map((h, i) => (
+                    <tr key={`${h.ip}-${h.hostname}-${h.agent_name}-${i}`} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                      <td style={{ padding: '6px', fontFamily: 'monospace' }}>{h.ip}</td>
+                      <td style={{ padding: '6px', fontFamily: 'monospace', color: '#3b82f6' }}>{h.hostname}</td>
+                      <td style={{ padding: '6px', fontSize: '12px' }}>{h.agent_name}</td>
+                      <td style={{ padding: '6px', textAlign: 'center' }}>{h.seen_count}</td>
+                      <td style={{ padding: '6px', fontSize: '12px', color: '#6b7280' }}>
+                        {formatTime(h.first_seen)}
+                      </td>
+                      <td style={{ padding: '6px', fontSize: '12px', color: '#6b7280' }} title={formatTime(h.last_seen)}>
+                        {formatAgo(h.last_seen)}
+                      </td>
+                    </tr>
+                  ))}
+                  {hostnames.length === 0 && (
+                    <tr>
+                      <td colSpan={6} style={{ padding: '20px', textAlign: 'center', color: '#9ca3af' }}>
+                        No hostname mappings yet. The enricher runs every 60 seconds.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       )}
     </div>

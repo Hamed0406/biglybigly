@@ -57,6 +57,25 @@ func (m *Module) Migrate(db *sql.DB) error {
 			hostname    TEXT,
 			resolved_at INTEGER NOT NULL
 		);
+
+		CREATE TABLE IF NOT EXISTS netmon_hostname_history (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			ip          TEXT NOT NULL,
+			hostname    TEXT NOT NULL,
+			agent_name  TEXT NOT NULL DEFAULT 'local',
+			first_seen  INTEGER NOT NULL,
+			last_seen   INTEGER NOT NULL,
+			seen_count  INTEGER NOT NULL DEFAULT 1,
+			UNIQUE(ip, hostname, agent_name)
+		);
+		CREATE INDEX IF NOT EXISTS idx_netmon_hostname_history_ip
+			ON netmon_hostname_history(ip, last_seen DESC);
+		CREATE INDEX IF NOT EXISTS idx_netmon_hostname_history_hostname
+			ON netmon_hostname_history(hostname);
+		CREATE INDEX IF NOT EXISTS idx_netmon_hostname_history_last_seen
+			ON netmon_hostname_history(last_seen DESC);
+		CREATE INDEX IF NOT EXISTS idx_netmon_hostname_history_agent
+			ON netmon_hostname_history(agent_name);
 	`)
 	return err
 }
@@ -73,6 +92,10 @@ func (m *Module) Init(p platform.Platform) error {
 	mux.Handle("GET /api/netmon/stats", auth(http.HandlerFunc(m.handleStats)))
 	mux.Handle("GET /api/netmon/agents", auth(http.HandlerFunc(m.handleAgents)))
 	mux.Handle("GET /api/netmon/graph", auth(http.HandlerFunc(m.handleGraph)))
+	mux.Handle("GET /api/netmon/hostnames", auth(http.HandlerFunc(m.handleHostnames)))
+	mux.Handle("GET /api/netmon/hostnames/recent", auth(http.HandlerFunc(m.handleRecentHostnames)))
+	mux.Handle("GET /api/netmon/hostnames/lookup", auth(http.HandlerFunc(m.handleHostnameLookup)))
+	mux.Handle("GET /api/netmon/hostnames/stats", auth(http.HandlerFunc(m.handleHostnameStats)))
 	mux.Handle("POST /api/netmon/ingest", http.HandlerFunc(m.handleIngest))
 
 	logger.Info("Netmon routes registered",
@@ -83,9 +106,13 @@ func (m *Module) Init(p platform.Platform) error {
 }
 
 func (m *Module) Start(ctx context.Context) error {
-	// In server mode, start local monitoring if no agents connected
+	// In server mode, start local monitoring
 	collector := NewCollector()
 	go collector.Run(ctx, m.p.DB(), "local")
+
+	// Start hostname history enrichment worker
+	go m.runHostnameEnricher(ctx)
+
 	<-ctx.Done()
 	return nil
 }

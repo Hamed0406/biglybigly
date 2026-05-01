@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 )
 
 type FlowRow struct {
@@ -413,4 +414,176 @@ func (m *Module) handleIngest(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]int{"ingested": ingested, "errors": errors})
+}
+
+// --- Hostname History Handlers ---
+
+type HostnameRecord struct {
+	IP        string `json:"ip"`
+	Hostname  string `json:"hostname"`
+	AgentName string `json:"agent_name"`
+	FirstSeen int64  `json:"first_seen"`
+	LastSeen  int64  `json:"last_seen"`
+	SeenCount int    `json:"seen_count"`
+}
+
+// handleHostnames returns all tracked hostname mappings
+func (m *Module) handleHostnames(w http.ResponseWriter, r *http.Request) {
+	db := m.p.DB()
+	agent := r.URL.Query().Get("agent")
+	search := r.URL.Query().Get("search")
+	limitStr := r.URL.Query().Get("limit")
+	limit := 200
+	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 1000 {
+		limit = l
+	}
+
+	query := `SELECT ip, hostname, agent_name, first_seen, last_seen, seen_count
+		FROM netmon_hostname_history WHERE 1=1`
+	var args []interface{}
+
+	if agent != "" {
+		query += " AND agent_name = ?"
+		args = append(args, agent)
+	}
+	if search != "" {
+		query += " AND (ip LIKE ? OR hostname LIKE ?)"
+		pattern := "%" + search + "%"
+		args = append(args, pattern, pattern)
+	}
+
+	query += " ORDER BY last_seen DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var records []HostnameRecord
+	for rows.Next() {
+		var r HostnameRecord
+		if err := rows.Scan(&r.IP, &r.Hostname, &r.AgentName, &r.FirstSeen, &r.LastSeen, &r.SeenCount); err != nil {
+			continue
+		}
+		records = append(records, r)
+	}
+
+	if records == nil {
+		records = []HostnameRecord{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(records)
+}
+
+// handleRecentHostnames returns recently discovered hostname mappings
+func (m *Module) handleRecentHostnames(w http.ResponseWriter, r *http.Request) {
+	db := m.p.DB()
+	agent := r.URL.Query().Get("agent")
+
+	query := `SELECT ip, hostname, agent_name, first_seen, last_seen, seen_count
+		FROM netmon_hostname_history WHERE 1=1`
+	var args []interface{}
+
+	if agent != "" {
+		query += " AND agent_name = ?"
+		args = append(args, agent)
+	}
+
+	query += " ORDER BY first_seen DESC LIMIT 50"
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var records []HostnameRecord
+	for rows.Next() {
+		var r HostnameRecord
+		if err := rows.Scan(&r.IP, &r.Hostname, &r.AgentName, &r.FirstSeen, &r.LastSeen, &r.SeenCount); err != nil {
+			continue
+		}
+		records = append(records, r)
+	}
+
+	if records == nil {
+		records = []HostnameRecord{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(records)
+}
+
+// handleHostnameLookup returns all hostname records for a specific IP
+func (m *Module) handleHostnameLookup(w http.ResponseWriter, r *http.Request) {
+	db := m.p.DB()
+	ip := r.URL.Query().Get("ip")
+	if ip == "" {
+		http.Error(w, `{"error":"ip parameter required"}`, http.StatusBadRequest)
+		return
+	}
+
+	rows, err := db.Query(`
+		SELECT ip, hostname, agent_name, first_seen, last_seen, seen_count
+		FROM netmon_hostname_history
+		WHERE ip = ?
+		ORDER BY last_seen DESC
+	`, ip)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var records []HostnameRecord
+	for rows.Next() {
+		var r HostnameRecord
+		if err := rows.Scan(&r.IP, &r.Hostname, &r.AgentName, &r.FirstSeen, &r.LastSeen, &r.SeenCount); err != nil {
+			continue
+		}
+		records = append(records, r)
+	}
+
+	if records == nil {
+		records = []HostnameRecord{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(records)
+}
+
+// handleHostnameStats returns summary stats for hostname tracking
+func (m *Module) handleHostnameStats(w http.ResponseWriter, r *http.Request) {
+	db := m.p.DB()
+	agent := r.URL.Query().Get("agent")
+
+	type HostnameStats struct {
+		TotalMappings int   `json:"total_mappings"`
+		UniqueIPs     int   `json:"unique_ips"`
+		UniqueNames   int   `json:"unique_names"`
+		NewToday      int   `json:"new_today"`
+		LastUpdated   int64 `json:"last_updated"`
+	}
+
+	var stats HostnameStats
+	todayStart := time.Now().Truncate(24 * time.Hour).Unix()
+
+	if agent != "" {
+		db.QueryRow(`SELECT COUNT(*) FROM netmon_hostname_history WHERE agent_name = ?`, agent).Scan(&stats.TotalMappings)
+		db.QueryRow(`SELECT COUNT(DISTINCT ip) FROM netmon_hostname_history WHERE agent_name = ?`, agent).Scan(&stats.UniqueIPs)
+		db.QueryRow(`SELECT COUNT(DISTINCT hostname) FROM netmon_hostname_history WHERE agent_name = ?`, agent).Scan(&stats.UniqueNames)
+		db.QueryRow(`SELECT COUNT(*) FROM netmon_hostname_history WHERE agent_name = ? AND first_seen >= ?`, agent, todayStart).Scan(&stats.NewToday)
+		db.QueryRow(`SELECT COALESCE(MAX(last_seen), 0) FROM netmon_hostname_history WHERE agent_name = ?`, agent).Scan(&stats.LastUpdated)
+	} else {
+		db.QueryRow(`SELECT COUNT(*) FROM netmon_hostname_history`).Scan(&stats.TotalMappings)
+		db.QueryRow(`SELECT COUNT(DISTINCT ip) FROM netmon_hostname_history`).Scan(&stats.UniqueIPs)
+		db.QueryRow(`SELECT COUNT(DISTINCT hostname) FROM netmon_hostname_history`).Scan(&stats.UniqueNames)
+		db.QueryRow(`SELECT COUNT(*) FROM netmon_hostname_history WHERE first_seen >= ?`, todayStart).Scan(&stats.NewToday)
+		db.QueryRow(`SELECT COALESCE(MAX(last_seen), 0) FROM netmon_hostname_history`).Scan(&stats.LastUpdated)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
 }

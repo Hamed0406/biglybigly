@@ -109,3 +109,45 @@ export async function getGraph(agent?: string): Promise<GraphData> {
   if (!res.ok) throw new Error('Failed to get graph');
   return res.json();
 }
+
+export interface HostnameRecord {
+  ip: string;
+  hostname: string;
+  agent_name: string;
+  first_seen: number;
+  last_seen: number;
+  seen_count: number;
+}
+
+export interface HostnameStats {
+  total_mappings: number;
+  unique_ips: number;
+  unique_names: number;
+  new_today: number;
+  last_updated: number;
+}
+
+export async function getHostnames(params?: { agent?: string; search?: string }): Promise<HostnameRecord[]> {
+  const query = new URLSearchParams();
+  if (params?.agent) query.set('agent', params.agent);
+  if (params?.search) query.set('search', params.search);
+  const res = await fetch(`${API_BASE}/hostnames?${query}`);
+  if (!res.ok) throw new Error('Failed to get hostnames');
+  return res.json();
+}
+
+export async function getRecentHostnames(agent?: string): Promise<HostnameRecord[]> {
+  const query = new URLSearchParams();
+  if (agent) query.set('agent', agent);
+  const res = await fetch(`${API_BASE}/hostnames/recent?${query}`);
+  if (!res.ok) throw new Error('Failed to get recent hostnames');
+  return res.json();
+}
+
+export async function getHostnameStats(agent?: string): Promise<HostnameStats> {
+  const query = new URLSearchParams();
+  if (agent) query.set('agent', agent);
+  const res = await fetch(`${API_BASE}/hostnames/stats?${query}`);
+  if (!res.ok) throw new Error('Failed to get hostname stats');
+  return res.json();
+}
