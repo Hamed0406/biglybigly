@@ -102,19 +102,26 @@ func (m *Module) handleListFlows(w http.ResponseWriter, r *http.Request) {
 
 func (m *Module) handleTopHosts(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
+	agent := r.URL.Query().Get("agent")
 	limitStr := r.URL.Query().Get("limit")
 	limit := 20
 	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
 		limit = l
 	}
 
-	rows, err := db.Query(`
+	query := `
 		SELECT COALESCE(NULLIF(hostname,''), remote_ip) AS host, SUM(count) AS total
 		FROM netmon_flows
-		GROUP BY host
-		ORDER BY total DESC
-		LIMIT ?
-	`, limit)
+	`
+	var args []interface{}
+	if agent != "" {
+		query += " WHERE agent_name = ?"
+		args = append(args, agent)
+	}
+	query += " GROUP BY host ORDER BY total DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -140,14 +147,17 @@ func (m *Module) handleTopHosts(w http.ResponseWriter, r *http.Request) {
 
 func (m *Module) handleTopPorts(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
+	agent := r.URL.Query().Get("agent")
 
-	rows, err := db.Query(`
-		SELECT remote_port, SUM(count) AS total
-		FROM netmon_flows
-		GROUP BY remote_port
-		ORDER BY total DESC
-		LIMIT 20
-	`)
+	query := `SELECT remote_port, SUM(count) AS total FROM netmon_flows`
+	var args []interface{}
+	if agent != "" {
+		query += " WHERE agent_name = ?"
+		args = append(args, agent)
+	}
+	query += " GROUP BY remote_port ORDER BY total DESC LIMIT 20"
+
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -183,15 +193,162 @@ func (m *Module) handleTopPorts(w http.ResponseWriter, r *http.Request) {
 
 func (m *Module) handleStats(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
+	agent := r.URL.Query().Get("agent")
 	var stats StatsResponse
 
-	db.QueryRow(`SELECT COUNT(*) FROM netmon_flows`).Scan(&stats.TotalFlows)
-	db.QueryRow(`SELECT COUNT(DISTINCT COALESCE(NULLIF(hostname,''), remote_ip)) FROM netmon_flows`).Scan(&stats.TotalHosts)
-	db.QueryRow(`SELECT COUNT(*) FROM netmon_flows WHERE state = 'ESTABLISHED'`).Scan(&stats.ActiveNow)
-	db.QueryRow(`SELECT COUNT(DISTINCT agent_name) FROM netmon_flows`).Scan(&stats.UniqueAgents)
+	if agent != "" {
+		db.QueryRow(`SELECT COUNT(*) FROM netmon_flows WHERE agent_name = ?`, agent).Scan(&stats.TotalFlows)
+		db.QueryRow(`SELECT COUNT(DISTINCT COALESCE(NULLIF(hostname,''), remote_ip)) FROM netmon_flows WHERE agent_name = ?`, agent).Scan(&stats.TotalHosts)
+		db.QueryRow(`SELECT COUNT(*) FROM netmon_flows WHERE state = 'ESTABLISHED' AND agent_name = ?`, agent).Scan(&stats.ActiveNow)
+		stats.UniqueAgents = 1
+	} else {
+		db.QueryRow(`SELECT COUNT(*) FROM netmon_flows`).Scan(&stats.TotalFlows)
+		db.QueryRow(`SELECT COUNT(DISTINCT COALESCE(NULLIF(hostname,''), remote_ip)) FROM netmon_flows`).Scan(&stats.TotalHosts)
+		db.QueryRow(`SELECT COUNT(*) FROM netmon_flows WHERE state = 'ESTABLISHED'`).Scan(&stats.ActiveNow)
+		db.QueryRow(`SELECT COUNT(DISTINCT agent_name) FROM netmon_flows`).Scan(&stats.UniqueAgents)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stats)
+}
+
+// handleAgents returns a list of known agent names with their flow counts and last seen time
+func (m *Module) handleAgents(w http.ResponseWriter, r *http.Request) {
+	db := m.p.DB()
+
+	rows, err := db.Query(`
+		SELECT agent_name, COUNT(*) as flow_count, MAX(last_seen) as last_active
+		FROM netmon_flows
+		GROUP BY agent_name
+		ORDER BY last_active DESC
+	`)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type AgentInfo struct {
+		Name       string `json:"name"`
+		FlowCount  int    `json:"flow_count"`
+		LastActive int64  `json:"last_active"`
+	}
+
+	var agents []AgentInfo
+	for rows.Next() {
+		var a AgentInfo
+		if err := rows.Scan(&a.Name, &a.FlowCount, &a.LastActive); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		agents = append(agents, a)
+	}
+
+	if agents == nil {
+		agents = []AgentInfo{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(agents)
+}
+
+// handleGraph returns nodes and edges for the network topology visualization
+func (m *Module) handleGraph(w http.ResponseWriter, r *http.Request) {
+	db := m.p.DB()
+	agent := r.URL.Query().Get("agent")
+
+	query := `
+		SELECT agent_name, COALESCE(NULLIF(hostname,''), remote_ip) AS target,
+		       remote_port, proto, SUM(count) AS total,
+		       MAX(last_seen) AS last_active
+		FROM netmon_flows
+	`
+	var args []interface{}
+	if agent != "" {
+		query += " WHERE agent_name = ?"
+		args = append(args, agent)
+	}
+	query += " GROUP BY agent_name, target, remote_port, proto ORDER BY total DESC LIMIT 500"
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type GraphNode struct {
+		ID    string `json:"id"`
+		Label string `json:"label"`
+		Type  string `json:"type"` // "agent" or "host"
+		Size  int    `json:"size"`
+	}
+	type GraphEdge struct {
+		Source string `json:"source"`
+		Target string `json:"target"`
+		Port   int    `json:"port"`
+		Proto  string `json:"proto"`
+		Count  int    `json:"count"`
+	}
+
+	nodeMap := make(map[string]*GraphNode)
+	var edges []GraphEdge
+
+	for rows.Next() {
+		var agentName, target, proto string
+		var port, count int
+		var lastActive int64
+		if err := rows.Scan(&agentName, &target, &port, &proto, &count, &lastActive); err != nil {
+			continue
+		}
+
+		// Ensure agent node exists
+		if _, ok := nodeMap[agentName]; !ok {
+			nodeMap[agentName] = &GraphNode{
+				ID:    agentName,
+				Label: agentName,
+				Type:  "agent",
+				Size:  0,
+			}
+		}
+		nodeMap[agentName].Size += count
+
+		// Ensure host node exists (group by host, not host:port)
+		if _, ok := nodeMap[target]; !ok {
+			nodeMap[target] = &GraphNode{
+				ID:    target,
+				Label: target,
+				Type:  "host",
+				Size:  0,
+			}
+		}
+		nodeMap[target].Size += count
+
+		edges = append(edges, GraphEdge{
+			Source: agentName,
+			Target: target,
+			Port:   port,
+			Proto:  proto,
+			Count:  count,
+		})
+	}
+
+	var nodes []GraphNode
+	for _, n := range nodeMap {
+		nodes = append(nodes, *n)
+	}
+
+	if nodes == nil {
+		nodes = []GraphNode{}
+	}
+	if edges == nil {
+		edges = []GraphEdge{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"nodes": nodes,
+		"edges": edges,
+	})
 }
 
 // handleIngest receives flow data from agents via HTTP (alternative to WebSocket)

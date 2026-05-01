@@ -71,6 +71,8 @@ func (m *Module) Init(p platform.Platform) error {
 	mux.Handle("GET /api/netmon/top-hosts", auth(http.HandlerFunc(m.handleTopHosts)))
 	mux.Handle("GET /api/netmon/top-ports", auth(http.HandlerFunc(m.handleTopPorts)))
 	mux.Handle("GET /api/netmon/stats", auth(http.HandlerFunc(m.handleStats)))
+	mux.Handle("GET /api/netmon/agents", auth(http.HandlerFunc(m.handleAgents)))
+	mux.Handle("GET /api/netmon/graph", auth(http.HandlerFunc(m.handleGraph)))
 	mux.Handle("POST /api/netmon/ingest", http.HandlerFunc(m.handleIngest))
 
 	logger.Info("Netmon routes registered",

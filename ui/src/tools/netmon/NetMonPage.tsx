@@ -1,36 +1,45 @@
 import { useState, useEffect, useCallback } from 'react';
-import { getFlows, getTopHosts, getTopPorts, getStats, Flow, TopEntry, Stats } from './api';
+import { getFlows, getTopHosts, getTopPorts, getStats, getAgents, getGraph, Flow, TopEntry, Stats, AgentInfo, GraphData } from './api';
+import NetworkMap from './NetworkMap';
 
 export default function NetMonPage() {
   const [flows, setFlows] = useState<Flow[]>([]);
   const [topHosts, setTopHosts] = useState<TopEntry[]>([]);
   const [topPorts, setTopPorts] = useState<TopEntry[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
+  const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [graphData, setGraphData] = useState<GraphData>({ nodes: [], edges: [] });
+  const [selectedAgent, setSelectedAgent] = useState('');
   const [search, setSearch] = useState('');
   const [proto, setProto] = useState('');
-  const [tab, setTab] = useState<'flows' | 'hosts' | 'ports'>('flows');
+  const [tab, setTab] = useState<'flows' | 'hosts' | 'ports' | 'map'>('flows');
   const [loading, setLoading] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
 
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [f, h, p, s] = await Promise.all([
-        getFlows({ search, proto: proto || undefined, limit: 200 }),
-        getTopHosts(20),
-        getTopPorts(),
-        getStats(),
+      const agent = selectedAgent || undefined;
+      const [f, h, p, s, a, gr] = await Promise.all([
+        getFlows({ search, proto: proto || undefined, agent, limit: 200 }),
+        getTopHosts(20, agent),
+        getTopPorts(agent),
+        getStats(agent),
+        getAgents(),
+        getGraph(agent),
       ]);
       setFlows(f);
       setTopHosts(h);
       setTopPorts(p);
       setStats(s);
+      setAgents(a);
+      setGraphData(gr);
     } catch (err) {
       console.error('Failed to load data:', err);
     } finally {
       setLoading(false);
     }
-  }, [search, proto]);
+  }, [search, proto, selectedAgent]);
 
   useEffect(() => {
     loadData();
@@ -90,6 +99,42 @@ export default function NetMonPage() {
         </div>
       </div>
 
+      {/* Agent selector */}
+      {agents.length > 1 && (
+        <div style={{
+          display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '16px',
+          backgroundColor: 'white', borderRadius: '8px', padding: '12px 16px',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+        }}>
+          <span style={{ fontSize: '14px', fontWeight: 'bold', color: '#374151' }}>Agent:</span>
+          <button
+            onClick={() => setSelectedAgent('')}
+            style={{
+              padding: '4px 12px', border: 'none', borderRadius: '16px', cursor: 'pointer',
+              fontSize: '13px', fontWeight: selectedAgent === '' ? 'bold' : 'normal',
+              backgroundColor: selectedAgent === '' ? '#3b82f6' : '#e5e7eb',
+              color: selectedAgent === '' ? 'white' : '#374151',
+            }}
+          >
+            All ({agents.reduce((sum, a) => sum + a.flow_count, 0)})
+          </button>
+          {agents.map((a) => (
+            <button
+              key={a.name}
+              onClick={() => setSelectedAgent(a.name)}
+              style={{
+                padding: '4px 12px', border: 'none', borderRadius: '16px', cursor: 'pointer',
+                fontSize: '13px', fontWeight: selectedAgent === a.name ? 'bold' : 'normal',
+                backgroundColor: selectedAgent === a.name ? '#3b82f6' : '#e5e7eb',
+                color: selectedAgent === a.name ? 'white' : '#374151',
+              }}
+            >
+              {a.name} ({a.flow_count})
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Stats cards */}
       {stats && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '20px' }}>
@@ -115,7 +160,7 @@ export default function NetMonPage() {
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '16px' }}>
-        {(['flows', 'hosts', 'ports'] as const).map((t) => (
+        {(['flows', 'hosts', 'ports', 'map'] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -125,7 +170,7 @@ export default function NetMonPage() {
               color: tab === t ? 'white' : '#374151', fontWeight: tab === t ? 'bold' : 'normal',
             }}
           >
-            {t === 'flows' ? 'Connections' : t === 'hosts' ? 'Top Hosts' : 'Top Ports'}
+            {t === 'flows' ? 'Connections' : t === 'hosts' ? 'Top Hosts' : t === 'ports' ? 'Top Ports' : '🗺 Map'}
           </button>
         ))}
       </div>
@@ -277,6 +322,25 @@ export default function NetMonPage() {
           })}
           {topPorts.length === 0 && (
             <p style={{ color: '#9ca3af', textAlign: 'center', padding: '20px' }}>No data yet.</p>
+          )}
+        </div>
+      )}
+      {/* Map tab */}
+      {tab === 'map' && (
+        <div>
+          <div style={{ marginBottom: '8px', fontSize: '13px', color: '#6b7280' }}>
+            Network topology — {graphData.nodes.length} nodes, {graphData.edges.length} connections
+            {selectedAgent && <span> (filtered to <strong>{selectedAgent}</strong>)</span>}
+          </div>
+          {graphData.nodes.length > 0 ? (
+            <NetworkMap data={graphData} height={550} />
+          ) : (
+            <div style={{
+              backgroundColor: 'white', borderRadius: '8px', padding: '60px',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.1)', textAlign: 'center', color: '#9ca3af',
+            }}>
+              No connection data yet. Wait for agents to report flows.
+            </div>
           )}
         </div>
       )}

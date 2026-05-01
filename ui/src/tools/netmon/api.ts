@@ -29,6 +29,12 @@ export interface Stats {
   unique_agents: number;
 }
 
+export interface AgentInfo {
+  name: string;
+  flow_count: number;
+  last_active: number;
+}
+
 export async function getFlows(params?: {
   search?: string;
   agent?: string;
@@ -45,21 +51,61 @@ export async function getFlows(params?: {
   return res.json();
 }
 
-export async function getTopHosts(limit?: number): Promise<TopEntry[]> {
-  const query = limit ? `?limit=${limit}` : '';
-  const res = await fetch(`${API_BASE}/top-hosts${query}`);
+export async function getTopHosts(limit?: number, agent?: string): Promise<TopEntry[]> {
+  const query = new URLSearchParams();
+  if (limit) query.set('limit', String(limit));
+  if (agent) query.set('agent', agent);
+  const res = await fetch(`${API_BASE}/top-hosts?${query}`);
   if (!res.ok) throw new Error('Failed to get top hosts');
   return res.json();
 }
 
-export async function getTopPorts(): Promise<TopEntry[]> {
-  const res = await fetch(`${API_BASE}/top-ports`);
+export async function getTopPorts(agent?: string): Promise<TopEntry[]> {
+  const query = new URLSearchParams();
+  if (agent) query.set('agent', agent);
+  const res = await fetch(`${API_BASE}/top-ports?${query}`);
   if (!res.ok) throw new Error('Failed to get top ports');
   return res.json();
 }
 
-export async function getStats(): Promise<Stats> {
-  const res = await fetch(`${API_BASE}/stats`);
+export async function getStats(agent?: string): Promise<Stats> {
+  const query = new URLSearchParams();
+  if (agent) query.set('agent', agent);
+  const res = await fetch(`${API_BASE}/stats?${query}`);
   if (!res.ok) throw new Error('Failed to get stats');
+  return res.json();
+}
+
+export async function getAgents(): Promise<AgentInfo[]> {
+  const res = await fetch(`${API_BASE}/agents`);
+  if (!res.ok) throw new Error('Failed to get agents');
+  return res.json();
+}
+
+export interface GraphNode {
+  id: string;
+  label: string;
+  type: 'agent' | 'host';
+  size: number;
+}
+
+export interface GraphEdge {
+  source: string;
+  target: string;
+  port: number;
+  proto: string;
+  count: number;
+}
+
+export interface GraphData {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+export async function getGraph(agent?: string): Promise<GraphData> {
+  const query = new URLSearchParams();
+  if (agent) query.set('agent', agent);
+  const res = await fetch(`${API_BASE}/graph?${query}`);
+  if (!res.ok) throw new Error('Failed to get graph');
   return res.json();
 }
