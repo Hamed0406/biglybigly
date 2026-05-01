@@ -32,7 +32,13 @@ func (m *Module) runHostnameEnricher(ctx context.Context) {
 }
 
 func (m *Module) enrichHostnames(ctx context.Context, db *sql.DB, logger *slog.Logger) {
-	// Get all flows that have a hostname already set (from agent-side resolution)
+	// Collect flows with hostnames into memory first to avoid holding the DB connection
+	type flowMapping struct {
+		agentName string
+		ip        string
+		hostname  string
+	}
+
 	rows, err := db.Query(`
 		SELECT DISTINCT agent_name, remote_ip, hostname
 		FROM netmon_flows
@@ -42,55 +48,60 @@ func (m *Module) enrichHostnames(ctx context.Context, db *sql.DB, logger *slog.L
 		logger.Warn("Hostname enricher: query failed", "err", err)
 		return
 	}
-	defer rows.Close()
 
-	now := time.Now().Unix()
-	inserted := 0
-	updated := 0
-
+	var mappings []flowMapping
 	for rows.Next() {
-		var agentName, ip, hostname string
-		if err := rows.Scan(&agentName, &ip, &hostname); err != nil {
+		var fm flowMapping
+		if err := rows.Scan(&fm.agentName, &fm.ip, &fm.hostname); err != nil {
 			continue
 		}
+		mappings = append(mappings, fm)
+	}
+	rows.Close()
 
-		res, err := db.ExecContext(ctx, `
+	now := time.Now().Unix()
+	updated := 0
+
+	for _, fm := range mappings {
+		_, err := db.ExecContext(ctx, `
 			INSERT INTO netmon_hostname_history (ip, hostname, agent_name, first_seen, last_seen, seen_count)
 			VALUES (?, ?, ?, ?, ?, 1)
 			ON CONFLICT(ip, hostname, agent_name)
 			DO UPDATE SET last_seen = ?, seen_count = seen_count + 1
-		`, ip, hostname, agentName, now, now, now)
+		`, fm.ip, fm.hostname, fm.agentName, now, now, now)
 		if err != nil {
 			continue
 		}
-		if affected, _ := res.RowsAffected(); affected > 0 {
-			updated++
-		}
+		updated++
 	}
 
-	// Also do server-side reverse DNS for IPs without hostnames (batch, rate-limited)
+	// Collect unresolved IPs into memory first
 	unresolved, err := db.Query(`
 		SELECT DISTINCT remote_ip FROM netmon_flows
 		WHERE (hostname = '' OR hostname IS NULL)
 		AND remote_ip NOT IN (SELECT ip FROM netmon_dns_cache WHERE resolved_at > ?)
 		LIMIT 50
-	`, now-3600) // re-resolve every hour
+	`, now-3600)
 	if err != nil {
 		return
 	}
-	defer unresolved.Close()
+
+	var unresolvedIPs []string
+	for unresolved.Next() {
+		var ip string
+		if err := unresolved.Scan(&ip); err != nil {
+			continue
+		}
+		unresolvedIPs = append(unresolvedIPs, ip)
+	}
+	unresolved.Close()
 
 	resolved := 0
-	for unresolved.Next() {
+	for _, ip := range unresolvedIPs {
 		select {
 		case <-ctx.Done():
 			return
 		default:
-		}
-
-		var ip string
-		if err := unresolved.Scan(&ip); err != nil {
-			continue
 		}
 
 		names, err := net.LookupAddr(ip)
@@ -99,28 +110,32 @@ func (m *Module) enrichHostnames(ctx context.Context, db *sql.DB, logger *slog.L
 			hostname = strings.TrimSuffix(names[0], ".")
 		}
 
-		// Update dns cache
 		db.ExecContext(ctx, `
 			INSERT INTO netmon_dns_cache (ip, hostname, resolved_at)
 			VALUES (?, ?, ?)
 			ON CONFLICT(ip) DO UPDATE SET hostname = ?, resolved_at = ?
 		`, ip, hostname, now, hostname, now)
 
-		// Update flows with the resolved hostname
 		if hostname != "" {
 			db.ExecContext(ctx, `
 				UPDATE netmon_flows SET hostname = ?
 				WHERE remote_ip = ? AND (hostname = '' OR hostname IS NULL)
 			`, hostname, ip)
 
-			// Track in history (attribute to all agents that have this IP)
+			// Get agents for this IP
 			agentRows, err := db.Query(`
 				SELECT DISTINCT agent_name FROM netmon_flows WHERE remote_ip = ?
 			`, ip)
 			if err == nil {
+				var agents []string
 				for agentRows.Next() {
 					var agent string
 					agentRows.Scan(&agent)
+					agents = append(agents, agent)
+				}
+				agentRows.Close()
+
+				for _, agent := range agents {
 					db.ExecContext(ctx, `
 						INSERT INTO netmon_hostname_history (ip, hostname, agent_name, first_seen, last_seen, seen_count)
 						VALUES (?, ?, ?, ?, ?, 1)
@@ -128,13 +143,10 @@ func (m *Module) enrichHostnames(ctx context.Context, db *sql.DB, logger *slog.L
 						DO UPDATE SET last_seen = ?, seen_count = seen_count + 1
 					`, ip, hostname, agent, now, now, now)
 				}
-				agentRows.Close()
 			}
 
 			resolved++
 		}
-
-		inserted++
 	}
 
 	if updated > 0 || resolved > 0 {

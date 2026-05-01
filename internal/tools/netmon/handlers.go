@@ -384,8 +384,16 @@ func (m *Module) handleIngest(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
 	ingested := 0
 	errors := 0
+
+	tx, txErr := db.Begin()
+	if txErr != nil {
+		logger.Warn("Ingest: failed to begin transaction", "err", txErr)
+		http.Error(w, "database error", http.StatusInternalServerError)
+		return
+	}
+
 	for _, f := range payload.Flows {
-		_, err := db.Exec(`
+		_, err := tx.Exec(`
 			INSERT INTO netmon_flows (agent_name, proto, local_ip, local_port, remote_ip, remote_port, hostname, pid, process, state, count, first_seen, last_seen)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
 			ON CONFLICT(agent_name, proto, remote_ip, remote_port)
@@ -404,6 +412,12 @@ func (m *Module) handleIngest(w http.ResponseWriter, r *http.Request) {
 		} else {
 			ingested++
 		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		logger.Warn("Ingest: commit failed", "err", err)
+		http.Error(w, "database error", http.StatusInternalServerError)
+		return
 	}
 
 	logger.Info("Ingest: complete",

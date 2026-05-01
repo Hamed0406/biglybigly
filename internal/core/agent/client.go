@@ -148,6 +148,64 @@ func (c *Client) SendFlows(ctx context.Context, flows interface{}) error {
 	return nil
 }
 
+// sendJSON posts JSON data to a server endpoint and returns the response
+func (c *Client) sendJSON(ctx context.Context, path string, payload interface{}) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+
+	url := fmt.Sprintf("%s%s", c.serverURL, path)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.agentToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.agentToken)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		c.mu.Lock()
+		c.status = StatusDisconnected
+		c.totalErrors++
+		c.lastError = err.Error()
+		c.mu.Unlock()
+		return fmt.Errorf("send: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		errBody := make([]byte, 512)
+		n, _ := resp.Body.Read(errBody)
+		errDetail := string(errBody[:n])
+		c.mu.Lock()
+		c.totalErrors++
+		c.lastError = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, errDetail)
+		c.mu.Unlock()
+		return fmt.Errorf("server returned %d", resp.StatusCode)
+	}
+
+	c.mu.Lock()
+	c.status = StatusConnected
+	c.totalSent++
+	c.lastSendAt = time.Now()
+	c.lastError = ""
+	c.mu.Unlock()
+
+	return nil
+}
+
+// SendSysmon posts system monitoring data to the server
+func (c *Client) SendSysmon(ctx context.Context, snapshot interface{}) error {
+	payload := map[string]interface{}{
+		"agent":    c.agentName,
+		"snapshot": snapshot,
+	}
+	return c.sendJSON(ctx, "/api/sysmon/ingest", payload)
+}
+
 // Ping checks connectivity to the server by testing the ingest endpoint
 func (c *Client) Ping(ctx context.Context) error {
 	// First check basic server reachability

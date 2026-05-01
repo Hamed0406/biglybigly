@@ -18,6 +18,7 @@ import (
 	"github.com/hamed0406/biglybigly/internal/core/storage"
 	"github.com/hamed0406/biglybigly/internal/platform"
 	"github.com/hamed0406/biglybigly/internal/tools/netmon"
+	"github.com/hamed0406/biglybigly/internal/tools/sysmon"
 	"github.com/hamed0406/biglybigly/internal/tools/urlcheck"
 )
 
@@ -92,6 +93,7 @@ func main() {
 	modules := []platform.Module{
 		urlcheck.New(),
 		netmon.New(),
+		sysmon.New(),
 	}
 
 	// Create registry
@@ -209,6 +211,10 @@ func runAgent(ctx context.Context, cancel context.CancelFunc, cfg *config.Config
 	collector := netmon.NewCollectorWithLogger(logger)
 	logger.Info("Agent started — collecting network flows every 30s")
 
+	// Start sysmon collector
+	sysCollector := sysmon.NewCollector(logger)
+	logger.Info("Agent started — collecting system metrics every 30s")
+
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
@@ -233,6 +239,30 @@ func runAgent(ctx context.Context, cancel context.CancelFunc, cfg *config.Config
 					backoff = min(backoff*2, maxBackoff)
 				} else {
 					backoff = 1 * time.Second
+				}
+			}
+		}
+	}()
+
+	// Sysmon collection goroutine
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				snap, err := sysCollector.Collect()
+				if err != nil {
+					logger.Warn("Sysmon collect failed", "err", err)
+					continue
+				}
+				if err := client.SendSysmon(ctx, snap); err != nil {
+					logger.Warn("Failed to send sysmon data", "err", err)
+				} else {
+					logger.Debug("Sent sysmon snapshot", "cpu", snap.CPUPercent, "mem_used", snap.MemUsed)
 				}
 			}
 		}

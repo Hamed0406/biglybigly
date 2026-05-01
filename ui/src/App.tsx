@@ -5,10 +5,12 @@ import Shell from './components/Shell'
 import SetupPage from './components/SetupPage'
 import URLCheckPage from './tools/urlcheck/URLCheckPage'
 import NetMonPage from './tools/netmon/NetMonPage'
+import SysMonPage from './tools/sysmon/SysMonPage'
 
 const modulePages: { [key: string]: React.ComponentType } = {
   urlcheck: URLCheckPage,
   netmon: NetMonPage,
+  sysmon: SysMonPage,
 }
 
 export default function App() {
