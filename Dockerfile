@@ -15,7 +15,8 @@ WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-COPY --from=ui-builder /build/dist ./internal/core/api/static
+RUN rm -rf ./internal/core/api/static/*
+COPY --from=ui-builder /build/dist/ ./internal/core/api/static/
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -ldflags "-s -w" -o biglybigly ./cmd/biglybigly
 
