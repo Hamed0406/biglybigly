@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -48,11 +49,38 @@ func main() {
 	// Load config
 	cfg := config.Load()
 
+	// Setup file logging — write to data dir if DB path is set, else current dir
+	logPath := "biglybigly.log"
+	if dbPath := os.Getenv("BIGLYBIGLY_DB_PATH"); dbPath != "" {
+		// Use same directory as the database
+		dir := dbPath[:max(0, len(dbPath)-len("biglybigly.db"))]
+		if dir != "" {
+			logPath = dir + "biglybigly.log"
+		}
+	}
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "WARNING: could not open log file: %v\n", err)
+		logFile = nil
+	}
+	if logFile != nil {
+		defer logFile.Close()
+	}
+
+	// Multi-writer: log to both stderr and file
+	var logWriter io.Writer
+	if logFile != nil {
+		logWriter = io.MultiWriter(os.Stderr, logFile)
+	} else {
+		logWriter = os.Stderr
+	}
+
 	// Setup logger
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+	logger := slog.New(slog.NewTextHandler(logWriter, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
 	slog.SetDefault(logger)
+	logger.Info("Log file opened", "path", "biglybigly.log")
 
 	// Open database
 	db, err := storage.OpenDB(cfg)

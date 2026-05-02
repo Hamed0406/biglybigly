@@ -470,7 +470,21 @@ func (m *Module) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logger.Debug("dnsfilter ingest", "agent", payload.Agent, "queries", ingested)
+	// Log blocked queries at INFO level for audit trail
+	blockedCount := 0
+	for _, q := range payload.Queries {
+		if q.Blocked {
+			blockedCount++
+			logger.Info("DNS BLOCKED (via agent)",
+				"agent", payload.Agent,
+				"domain", q.Domain,
+				"type", q.QType,
+				"client", q.ClientIP,
+			)
+		}
+	}
+
+	logger.Info("dnsfilter ingest", "agent", payload.Agent, "queries", ingested, "blocked", blockedCount)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]int{"ingested": ingested})

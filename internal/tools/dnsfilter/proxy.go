@@ -114,7 +114,7 @@ func (p *Proxy) handleQuery(w dns.ResponseWriter, req *dns.Msg) {
 
 	// Check blocklist
 	if p.blocklist.IsBlocked(domain) {
-		p.logger.Debug("DNS blocked", "domain", domain, "client", clientIP)
+		p.logger.Info("DNS BLOCKED", "domain", domain, "type", qtype, "client", clientIP)
 
 		resp := new(dns.Msg)
 		resp.SetReply(req)
