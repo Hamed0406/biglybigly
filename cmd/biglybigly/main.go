@@ -243,6 +243,15 @@ func runAgent(ctx context.Context, cancel context.CancelFunc, cfg *config.Config
 		}
 	}()
 
+	// Auto-configure system DNS to use our proxy
+	dnsConfig := agent.NewDNSConfigurator(logger)
+	// Give proxy a moment to bind
+	time.Sleep(500 * time.Millisecond)
+	if dnsConfig.Configure() {
+		// Ensure DNS is restored on shutdown
+		defer dnsConfig.Restore()
+	}
+
 	// Periodically refresh blocklists (every 6 hours)
 	go func() {
 		ticker := time.NewTicker(6 * time.Hour)
