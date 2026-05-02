@@ -219,14 +219,27 @@ func runAgent(ctx context.Context, cancel context.CancelFunc, cfg *config.Config
 
 	// Start DNS filter proxy
 	dnsBlocklist := dnsfilter.NewBlocklistManager(logger)
+
+	// Seed default blocklist in agent DB if none exist
+	var blCount int
+	db.QueryRow(`SELECT COUNT(*) FROM dnsfilter_blocklists`).Scan(&blCount)
+	if blCount == 0 {
+		now := time.Now().Unix()
+		db.Exec(`INSERT OR IGNORE INTO dnsfilter_blocklists (url, name, enabled, created_at) VALUES (?, ?, 1, ?)`,
+			"https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts", "Steven Black Unified", now)
+		logger.Info("DNS Filter: seeded default blocklist on agent")
+	}
+
 	if err := dnsBlocklist.LoadFromDB(db); err != nil {
 		logger.Warn("Failed to load DNS blocklists", "err", err)
 	}
 	dnsProxy := dnsfilter.NewProxy("127.0.0.1:53", []string{"8.8.8.8:53", "1.1.1.1:53"}, dnsBlocklist, logger)
 
 	go func() {
+		logger.Info("Starting DNS proxy on 127.0.0.1:53 (requires admin/root)")
 		if err := dnsProxy.Start(ctx); err != nil {
-			logger.Warn("DNS proxy failed to start (port 53 may require admin/root)", "err", err)
+			logger.Error("DNS proxy failed to start", "err", err,
+				"hint", "On Windows: run as Administrator and stop 'DNS Client' service (net stop dnscache)")
 		}
 	}()
 
