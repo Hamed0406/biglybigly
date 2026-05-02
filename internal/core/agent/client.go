@@ -215,6 +215,30 @@ func (c *Client) SendDNSLogs(ctx context.Context, queries interface{}) error {
 	return c.sendJSON(ctx, "/api/dnsfilter/ingest", payload)
 }
 
+// FetchJSON does a GET request to a server endpoint and decodes JSON into dest
+func (c *Client) FetchJSON(ctx context.Context, path string, dest interface{}) error {
+	url := fmt.Sprintf("%s%s", c.serverURL, path)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	if c.agentToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.agentToken)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("fetch: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned %d", resp.StatusCode)
+	}
+
+	return json.NewDecoder(resp.Body).Decode(dest)
+}
+
 // Ping checks connectivity to the server by testing the ingest endpoint
 func (c *Client) Ping(ctx context.Context) error {
 	// First check basic server reachability

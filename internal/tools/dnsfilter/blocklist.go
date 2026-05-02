@@ -2,6 +2,7 @@ package dnsfilter
 
 import (
 	"bufio"
+	"context"
 	"database/sql"
 	"fmt"
 	"io"
@@ -20,6 +21,11 @@ type BlocklistManager struct {
 	total    int
 	logger   *slog.Logger
 	client   *http.Client
+}
+
+// RuleFetcher is implemented by the agent client to fetch rules from the server
+type RuleFetcher interface {
+	FetchJSON(ctx context.Context, path string, dest interface{}) error
 }
 
 func NewBlocklistManager(logger *slog.Logger) *BlocklistManager {
@@ -213,4 +219,68 @@ func normalizeDomain(d string) string {
 	d = strings.ToLower(strings.TrimSpace(d))
 	d = strings.TrimSuffix(d, ".")
 	return d
+}
+
+// SyncRulesFromServer fetches custom rules and blocklists from the server
+// and merges them into the agent's local DB and in-memory blocklist.
+func (bm *BlocklistManager) SyncRulesFromServer(fetcher RuleFetcher, db *sql.DB, logger *slog.Logger) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Sync custom rules from server
+	var rules []struct {
+		ID        int    `json:"id"`
+		Domain    string `json:"domain"`
+		Action    string `json:"action"`
+		CreatedAt int64  `json:"created_at"`
+	}
+
+	if err := fetcher.FetchJSON(ctx, "/api/dnsfilter/rules", &rules); err != nil {
+		logger.Warn("DNS Filter: failed to sync rules from server", "err", err)
+	} else {
+		// Apply rules to local DB and in-memory blocklist
+		for _, r := range rules {
+			db.Exec(`INSERT OR IGNORE INTO dnsfilter_custom_rules (domain, action, created_at) VALUES (?, ?, ?)`,
+				r.Domain, r.Action, r.CreatedAt)
+		}
+
+		// Update in-memory blocklist with synced rules
+		bm.mu.Lock()
+		for _, r := range rules {
+			d := normalizeDomain(r.Domain)
+			if r.Action == "allow" {
+				bm.allowed[d] = true
+				delete(bm.blocked, d)
+			} else {
+				bm.blocked[d] = true
+			}
+		}
+		bm.total = len(bm.blocked)
+		bm.mu.Unlock()
+
+		logger.Info("DNS Filter: synced rules from server", "rules", len(rules))
+	}
+
+	// Sync blocklists from server (add any new lists to local DB)
+	var lists []struct {
+		ID      int    `json:"id"`
+		URL     string `json:"url"`
+		Name    string `json:"name"`
+		Enabled bool   `json:"enabled"`
+	}
+
+	if err := fetcher.FetchJSON(ctx, "/api/dnsfilter/blocklists", &lists); err != nil {
+		logger.Warn("DNS Filter: failed to sync blocklists from server", "err", err)
+	} else {
+		now := time.Now().Unix()
+		for _, l := range lists {
+			enabled := 0
+			if l.Enabled {
+				enabled = 1
+			}
+			db.Exec(`INSERT OR IGNORE INTO dnsfilter_blocklists (url, name, enabled, created_at) VALUES (?, ?, ?, ?)`,
+				l.URL, l.Name, enabled, now)
+		}
+		logger.Info("DNS Filter: synced blocklists from server", "lists", len(lists))
+	}
 }

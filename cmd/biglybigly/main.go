@@ -233,9 +233,9 @@ func runAgent(ctx context.Context, cancel context.CancelFunc, cfg *config.Config
 		logger.Info("DNS Filter: seeded default blocklist on agent")
 	}
 
-	if err := dnsBlocklist.LoadFromDB(db); err != nil {
-		logger.Warn("Failed to load DNS blocklists", "err", err)
-	}
+	// Start proxy BEFORE loading blocklists — the blocklist download needs DNS,
+	// and if system DNS is already set to 127.0.0.1 from a previous run, the
+	// proxy must be running to resolve the download URL via upstream.
 	dnsProxy := dnsfilter.NewProxy("127.0.0.1:53", []string{"8.8.8.8:53", "1.1.1.1:53"}, dnsBlocklist, logger)
 
 	go func() {
@@ -251,11 +251,20 @@ func runAgent(ctx context.Context, cancel context.CancelFunc, cfg *config.Config
 	// Give proxy a moment to bind
 	time.Sleep(500 * time.Millisecond)
 	if dnsConfig.Configure() {
-		// Ensure DNS is restored on shutdown
 		defer dnsConfig.Restore()
 	}
 
-	// Periodically refresh blocklists (every 6 hours)
+	// Now load blocklists — proxy is running so DNS works for the download
+	go func() {
+		if err := dnsBlocklist.LoadFromDB(db); err != nil {
+			logger.Warn("Failed to load DNS blocklists", "err", err)
+		}
+
+		// Sync custom rules from server
+		dnsBlocklist.SyncRulesFromServer(client, db, logger)
+	}()
+
+	// Periodically refresh blocklists and sync rules (every 6 hours)
 	go func() {
 		ticker := time.NewTicker(6 * time.Hour)
 		defer ticker.Stop()
@@ -264,6 +273,7 @@ func runAgent(ctx context.Context, cancel context.CancelFunc, cfg *config.Config
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				dnsBlocklist.SyncRulesFromServer(client, db, logger)
 				if err := dnsBlocklist.LoadFromDB(db); err != nil {
 					logger.Warn("Blocklist refresh failed", "err", err)
 				}
