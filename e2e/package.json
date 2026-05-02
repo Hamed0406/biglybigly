@@ -1,0 +1,12 @@
+{
+  "name": "biglybigly-e2e",
+  "version": "1.0.0",
+  "description": "E2E tests for Biglybigly",
+  "scripts": {
+    "test": "npx playwright test",
+    "test:headed": "npx playwright test --headed"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.52.0"
+  }
+}
