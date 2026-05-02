@@ -21,7 +21,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.24'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Build UI
+        run: cd ui && npm ci && npm run build
+      - name: Copy UI to static
+        shell: bash
+        run: rm -rf internal/core/api/static && cp -r ui/dist internal/core/api/static
       - run: go test ./... -v -count=1
       - run: go vet ./...
 
@@ -59,7 +69,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.24'
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -68,7 +78,7 @@ jobs:
       - name: Build UI
         run: cd ui && npm ci && npm run build
       - name: Copy UI assets
-        run: cp -r ui/dist/* internal/core/api/static/
+        run: rm -rf internal/core/api/static && cp -r ui/dist internal/core/api/static
       - name: Build binary
         run: |
           VERSION=${{ github.ref_name }}
