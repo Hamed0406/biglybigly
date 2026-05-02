@@ -292,16 +292,23 @@ func runAgent(ctx context.Context, cancel context.CancelFunc, cfg *config.Config
 		dnsBlocklist.SyncRulesFromServer(client, db, logger)
 	}()
 
-	// Periodically refresh blocklists and sync rules (every 6 hours)
+	// Periodically refresh blocklists (every 6 hours) and sync rules (every 5 min)
 	go func() {
-		ticker := time.NewTicker(6 * time.Hour)
-		defer ticker.Stop()
+		ruleTicker := time.NewTicker(5 * time.Minute)
+		listTicker := time.NewTicker(6 * time.Hour)
+		defer ruleTicker.Stop()
+		defer listTicker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
+			case <-ruleTicker.C:
 				dnsBlocklist.SyncRulesFromServer(client, db, logger)
+				// Reload from DB to rebuild in-memory blocklist with current rules
+				if err := dnsBlocklist.LoadFromDB(db); err != nil {
+					logger.Warn("Blocklist reload failed", "err", err)
+				}
+			case <-listTicker.C:
 				if err := dnsBlocklist.LoadFromDB(db); err != nil {
 					logger.Warn("Blocklist refresh failed", "err", err)
 				}
