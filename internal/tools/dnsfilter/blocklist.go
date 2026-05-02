@@ -251,7 +251,8 @@ func extractDomainFromInput(input string) string {
 }
 
 // SyncRulesFromServer fetches custom rules and blocklists from the server
-// and replaces the agent's local rules to stay in sync (handles deletions).
+// and replaces the agent's local DB rules to stay in sync (handles deletions).
+// Call LoadFromDB after this to rebuild the in-memory blocklist.
 func (bm *BlocklistManager) SyncRulesFromServer(fetcher RuleFetcher, db *sql.DB, logger *slog.Logger) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -273,23 +274,6 @@ func (bm *BlocklistManager) SyncRulesFromServer(fetcher RuleFetcher, db *sql.DB,
 			db.Exec(`INSERT OR IGNORE INTO dnsfilter_custom_rules (domain, action, created_at) VALUES (?, ?, ?)`,
 				r.Domain, r.Action, r.CreatedAt)
 		}
-
-		// Rebuild in-memory allowed set from synced rules
-		bm.mu.Lock()
-		// Clear old custom rule entries from allowed/blocked
-		bm.allowed = make(map[string]bool)
-		for _, r := range rules {
-			d := normalizeDomain(r.Domain)
-			if r.Action == "allow" {
-				bm.allowed[d] = true
-				delete(bm.blocked, d)
-			} else {
-				bm.blocked[d] = true
-			}
-		}
-		bm.total = len(bm.blocked)
-		bm.mu.Unlock()
-
 		logger.Info("DNS Filter: synced rules from server", "rules", len(rules))
 	}
 

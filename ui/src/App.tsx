@@ -3,6 +3,7 @@ import { getModules } from './api/client'
 import { Module } from './types'
 import Shell from './components/Shell'
 import SetupPage from './components/SetupPage'
+import DashboardPage from './components/DashboardPage'
 import URLCheckPage from './tools/urlcheck/URLCheckPage'
 import NetMonPage from './tools/netmon/NetMonPage'
 import SysMonPage from './tools/sysmon/SysMonPage'
@@ -47,9 +48,6 @@ export default function App() {
     try {
       const data = await getModules()
       setModules(data || [])
-      if (data && data.length > 0) {
-        setCurrentModule(data[0].id)
-      }
     } catch (err) {
       console.error('Failed to load modules:', err)
     } finally {
@@ -73,7 +71,7 @@ export default function App() {
 
   return (
     <Shell modules={modules} currentModule={currentModule} onSelectModule={setCurrentModule}>
-      {CurrentPage ? <CurrentPage /> : <div style={{ padding: '20px' }}>Select a module</div>}
+      {CurrentPage ? <CurrentPage /> : <DashboardPage />}
     </Shell>
   )
 }

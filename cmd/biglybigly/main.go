@@ -284,12 +284,13 @@ func runAgent(ctx context.Context, cancel context.CancelFunc, cfg *config.Config
 
 	// Now load blocklists — proxy is running so DNS works for the download
 	go func() {
+		// Sync rules from server first (updates local DB)
+		dnsBlocklist.SyncRulesFromServer(client, db, logger)
+
+		// Then load everything from DB into memory (blocklists + rules)
 		if err := dnsBlocklist.LoadFromDB(db); err != nil {
 			logger.Warn("Failed to load DNS blocklists", "err", err)
 		}
-
-		// Sync custom rules from server
-		dnsBlocklist.SyncRulesFromServer(client, db, logger)
 	}()
 
 	// Periodically refresh blocklists (every 6 hours) and sync rules (every 5 min)
@@ -303,12 +304,13 @@ func runAgent(ctx context.Context, cancel context.CancelFunc, cfg *config.Config
 			case <-ctx.Done():
 				return
 			case <-ruleTicker.C:
+				// Sync rules from server (updates local DB), then rebuild memory
 				dnsBlocklist.SyncRulesFromServer(client, db, logger)
-				// Reload from DB to rebuild in-memory blocklist with current rules
 				if err := dnsBlocklist.LoadFromDB(db); err != nil {
 					logger.Warn("Blocklist reload failed", "err", err)
 				}
 			case <-listTicker.C:
+				// Full blocklist re-download
 				if err := dnsBlocklist.LoadFromDB(db); err != nil {
 					logger.Warn("Blocklist refresh failed", "err", err)
 				}

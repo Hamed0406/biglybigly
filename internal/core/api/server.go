@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/hamed0406/biglybigly/internal/core/storage"
 	"github.com/hamed0406/biglybigly/internal/platform"
@@ -17,6 +18,8 @@ import (
 
 //go:embed all:static
 var staticFS embed.FS
+
+func currentUnix() int64 { return time.Now().Unix() }
 
 type Server struct {
 	platform *platform.PlatformImpl
@@ -153,6 +156,192 @@ func NewServer(plat platform.Platform, registry *platform.Registry, bootstrapTok
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(items)
+	})
+
+	// --- Dashboard API ---
+	mux.HandleFunc("GET /api/dashboard", func(w http.ResponseWriter, r *http.Request) {
+		type AgentSummary struct {
+			Name       string  `json:"name"`
+			OS         string  `json:"os"`
+			CPUPercent float64 `json:"cpu_percent"`
+			MemPercent float64 `json:"mem_percent"`
+			Uptime     int64   `json:"uptime"`
+			LastSeen   int64   `json:"last_seen"`
+		}
+		type URLStatus struct {
+			URL        string `json:"url"`
+			StatusCode int    `json:"status_code"`
+			LastCheck  int64  `json:"last_check"`
+		}
+		type Dashboard struct {
+			AgentCount     int            `json:"agent_count"`
+			AgentsOnline   int            `json:"agents_online"`
+			DNSTotal       int            `json:"dns_total"`
+			DNSBlocked     int            `json:"dns_blocked"`
+			DNSBlockedPct  float64        `json:"dns_blocked_pct"`
+			BlocklistSize  int            `json:"blocklist_size"`
+			NetFlows       int            `json:"net_flows"`
+			TopBlocked     []struct {
+				Domain string `json:"domain"`
+				Count  int    `json:"count"`
+			} `json:"top_blocked"`
+			TopQueried []struct {
+				Domain string `json:"domain"`
+				Count  int    `json:"count"`
+			} `json:"top_queried"`
+			Agents       []AgentSummary `json:"agents"`
+			URLsDown     []URLStatus    `json:"urls_down"`
+			RecentBlocks []struct {
+				Domain    string `json:"domain"`
+				Agent     string `json:"agent"`
+				Timestamp int64  `json:"timestamp"`
+			} `json:"recent_blocks"`
+		}
+
+		var dash Dashboard
+		now := fmt.Sprintf("%d", currentUnix())
+		_ = now
+
+		// Agent count (from sysmon snapshots, distinct agent names in last 5 min)
+		fiveMinAgo := currentUnix() - 300
+		oneDayAgo := currentUnix() - 86400
+
+		var agentTotal, agentOnline int
+		db.QueryRow(`SELECT COUNT(DISTINCT agent_name) FROM sysmon_snapshots`).Scan(&agentTotal)
+		db.QueryRow(`SELECT COUNT(DISTINCT agent_name) FROM sysmon_snapshots WHERE collected_at >= ?`, fiveMinAgo).Scan(&agentOnline)
+		dash.AgentCount = agentTotal
+		dash.AgentsOnline = agentOnline
+
+		// DNS stats (24h)
+		db.QueryRow(`SELECT COUNT(*) FROM dnsfilter_queries WHERE timestamp >= ?`, oneDayAgo).Scan(&dash.DNSTotal)
+		db.QueryRow(`SELECT COUNT(*) FROM dnsfilter_queries WHERE timestamp >= ? AND blocked = 1`, oneDayAgo).Scan(&dash.DNSBlocked)
+		if dash.DNSTotal > 0 {
+			dash.DNSBlockedPct = float64(dash.DNSBlocked) / float64(dash.DNSTotal) * 100
+		}
+
+		// Blocklist size
+		db.QueryRow(`SELECT COALESCE(SUM(entry_count), 0) FROM dnsfilter_blocklists WHERE enabled = 1`).Scan(&dash.BlocklistSize)
+
+		// Network flows (24h)
+		db.QueryRow(`SELECT COUNT(*) FROM netmon_flows WHERE last_seen >= ?`, oneDayAgo).Scan(&dash.NetFlows)
+
+		// Top blocked domains (24h)
+		blockedRows, err := db.Query(`
+			SELECT domain, COUNT(*) as cnt FROM dnsfilter_queries
+			WHERE timestamp >= ? AND blocked = 1
+			GROUP BY domain ORDER BY cnt DESC LIMIT 5
+		`, oneDayAgo)
+		if err == nil {
+			for blockedRows.Next() {
+				var d struct {
+					Domain string `json:"domain"`
+					Count  int    `json:"count"`
+				}
+				blockedRows.Scan(&d.Domain, &d.Count)
+				dash.TopBlocked = append(dash.TopBlocked, d)
+			}
+			blockedRows.Close()
+		}
+
+		// Top queried domains (24h)
+		queriedRows, err := db.Query(`
+			SELECT domain, COUNT(*) as cnt FROM dnsfilter_queries
+			WHERE timestamp >= ?
+			GROUP BY domain ORDER BY cnt DESC LIMIT 5
+		`, oneDayAgo)
+		if err == nil {
+			for queriedRows.Next() {
+				var d struct {
+					Domain string `json:"domain"`
+					Count  int    `json:"count"`
+				}
+				queriedRows.Scan(&d.Domain, &d.Count)
+				dash.TopQueried = append(dash.TopQueried, d)
+			}
+			queriedRows.Close()
+		}
+
+		// Agent summaries (latest snapshot per agent)
+		agentRows, err := db.Query(`
+			SELECT s.agent_name, s.os, s.cpu_percent, s.mem_used, s.mem_total, s.uptime_secs, s.collected_at
+			FROM sysmon_snapshots s
+			INNER JOIN (
+				SELECT agent_name, MAX(collected_at) as max_time
+				FROM sysmon_snapshots GROUP BY agent_name
+			) latest ON s.agent_name = latest.agent_name AND s.collected_at = latest.max_time
+			ORDER BY s.collected_at DESC
+		`)
+		if err == nil {
+			for agentRows.Next() {
+				var a AgentSummary
+				var memUsed, memTotal int64
+				agentRows.Scan(&a.Name, &a.OS, &a.CPUPercent, &memUsed, &memTotal, &a.Uptime, &a.LastSeen)
+				if memTotal > 0 {
+					a.MemPercent = float64(memUsed) / float64(memTotal) * 100
+				}
+				dash.Agents = append(dash.Agents, a)
+			}
+			agentRows.Close()
+		}
+
+		// URLs down (last check not 200)
+		urlRows, err := db.Query(`SELECT url, last_status, last_check FROM urlcheck_urls WHERE last_status != 200 AND last_status != 0`)
+		if err == nil {
+			for urlRows.Next() {
+				var u URLStatus
+				urlRows.Scan(&u.URL, &u.StatusCode, &u.LastCheck)
+				dash.URLsDown = append(dash.URLsDown, u)
+			}
+			urlRows.Close()
+		}
+
+		// Recent blocks (last 10)
+		recentRows, err := db.Query(`
+			SELECT domain, agent_name, timestamp FROM dnsfilter_queries
+			WHERE blocked = 1 ORDER BY timestamp DESC LIMIT 10
+		`)
+		if err == nil {
+			for recentRows.Next() {
+				var b struct {
+					Domain    string `json:"domain"`
+					Agent     string `json:"agent"`
+					Timestamp int64  `json:"timestamp"`
+				}
+				recentRows.Scan(&b.Domain, &b.Agent, &b.Timestamp)
+				dash.RecentBlocks = append(dash.RecentBlocks, b)
+			}
+			recentRows.Close()
+		}
+
+		// Ensure non-nil slices
+		if dash.TopBlocked == nil {
+			dash.TopBlocked = make([]struct {
+				Domain string `json:"domain"`
+				Count  int    `json:"count"`
+			}, 0)
+		}
+		if dash.TopQueried == nil {
+			dash.TopQueried = make([]struct {
+				Domain string `json:"domain"`
+				Count  int    `json:"count"`
+			}, 0)
+		}
+		if dash.Agents == nil {
+			dash.Agents = []AgentSummary{}
+		}
+		if dash.URLsDown == nil {
+			dash.URLsDown = []URLStatus{}
+		}
+		if dash.RecentBlocks == nil {
+			dash.RecentBlocks = make([]struct {
+				Domain    string `json:"domain"`
+				Agent     string `json:"agent"`
+				Timestamp int64  `json:"timestamp"`
+			}, 0)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(dash)
 	})
 
 	// Serve static assets (embedded UI)

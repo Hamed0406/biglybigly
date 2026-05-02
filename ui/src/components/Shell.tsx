@@ -3,7 +3,7 @@ import { Module } from '../types'
 interface ShellProps {
   modules: Module[]
   currentModule: string | null
-  onSelectModule: (id: string) => void
+  onSelectModule: (id: string | null) => void
   children: React.ReactNode
 }
 
@@ -21,8 +21,40 @@ export default function Shell({ modules, currentModule, onSelectModule, children
           borderRight: '1px solid #374151',
         }}
       >
-        <h1 style={{ fontSize: '20px', marginBottom: '30px', fontWeight: 'bold' }}>Biglybigly</h1>
+        <h1
+          style={{ fontSize: '20px', marginBottom: '30px', fontWeight: 'bold', cursor: 'pointer' }}
+          onClick={() => onSelectModule(null)}
+        >
+          🏠 Biglybigly
+        </h1>
         <nav style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <button
+            onClick={() => onSelectModule(null)}
+            style={{
+              padding: '12px',
+              backgroundColor: currentModule === null ? '#3b82f6' : 'transparent',
+              border: 'none',
+              color: 'white',
+              textAlign: 'left',
+              cursor: 'pointer',
+              borderRadius: '6px',
+              fontSize: '14px',
+              fontWeight: currentModule === null ? 'bold' : 'normal',
+              transition: 'background-color 0.2s',
+            }}
+            onMouseOver={(e) => {
+              if (currentModule !== null) {
+                (e.target as HTMLButtonElement).style.backgroundColor = '#374151'
+              }
+            }}
+            onMouseOut={(e) => {
+              if (currentModule !== null) {
+                (e.target as HTMLButtonElement).style.backgroundColor = 'transparent'
+              }
+            }}
+          >
+            📊 Dashboard
+          </button>
           {modules.map((mod) => (
             <button
               key={mod.id}
