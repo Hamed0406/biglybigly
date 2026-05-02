@@ -12,7 +12,8 @@ import (
 	"github.com/miekg/dns"
 )
 
-// QueryLog represents a single DNS query for batching to server
+// QueryLog is a single DNS query record buffered on the agent and shipped to
+// the server for the dashboard / query log UI.
 type QueryLog struct {
 	Domain     string `json:"domain"`
 	QType      string `json:"qtype"`
@@ -23,20 +24,23 @@ type QueryLog struct {
 	Timestamp  int64  `json:"timestamp"`
 }
 
-// Proxy is the DNS proxy server that runs on agents
+// Proxy is the agent-side DNS proxy. It serves UDP and TCP on listenAddr,
+// answers blocked names with 0.0.0.0/::, forwards everything else to the
+// configured upstream resolvers, and buffers per-query logs for FlushLogs.
 type Proxy struct {
 	listenAddr string
 	upstream   []string
 	blocklist  *BlocklistManager
 	logger     *slog.Logger
 
-	mu       sync.Mutex
-	logBuf   []QueryLog
-	server   *dns.Server
-	server6  *dns.Server
+	mu      sync.Mutex
+	logBuf  []QueryLog
+	server  *dns.Server
+	server6 *dns.Server
 }
 
-// NewProxy creates a DNS proxy
+// NewProxy constructs a Proxy. If upstream is empty, it defaults to Google
+// and Cloudflare public resolvers.
 func NewProxy(listenAddr string, upstream []string, blocklist *BlocklistManager, logger *slog.Logger) *Proxy {
 	if len(upstream) == 0 {
 		upstream = []string{"8.8.8.8:53", "1.1.1.1:53"}
@@ -49,7 +53,8 @@ func NewProxy(listenAddr string, upstream []string, blocklist *BlocklistManager,
 	}
 }
 
-// Start runs the DNS proxy server (blocks until context is cancelled)
+// Start launches the UDP and TCP DNS listeners and blocks until ctx is
+// cancelled or either listener errors out.
 func (p *Proxy) Start(ctx context.Context) error {
 	handler := dns.HandlerFunc(p.handleQuery)
 
@@ -91,7 +96,8 @@ func (p *Proxy) Start(ctx context.Context) error {
 	}
 }
 
-// FlushLogs returns and clears the query log buffer
+// FlushLogs returns the buffered query logs and resets the buffer. Used by
+// the agent client to batch-ship logs to the server.
 func (p *Proxy) FlushLogs() []QueryLog {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -101,6 +107,9 @@ func (p *Proxy) FlushLogs() []QueryLog {
 	return logs
 }
 
+// handleQuery is the miekg/dns handler. Blocked names get a synthesized
+// 0.0.0.0 / :: answer; everything else is forwarded to upstream resolvers in
+// order until one succeeds.
 func (p *Proxy) handleQuery(w dns.ResponseWriter, req *dns.Msg) {
 	if len(req.Question) == 0 {
 		dns.HandleFailed(w, req)
@@ -203,6 +212,8 @@ func (p *Proxy) handleQuery(w dns.ResponseWriter, req *dns.Msg) {
 	})
 }
 
+// addLog appends to the in-memory log buffer, dropping the oldest 20% when
+// the buffer hits 10k entries to bound memory if the server is unreachable.
 func (p *Proxy) addLog(log QueryLog) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

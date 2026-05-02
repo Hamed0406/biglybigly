@@ -1,5 +1,11 @@
-// Sysmon API client
+/**
+ * SysMon API client.
+ *
+ * Typed fetch wrappers for `/api/sysmon/*` — current snapshots, historical
+ * series for sparklines, mounted-disk usage, and the agent index.
+ */
 
+/** Most recent CPU/memory/load snapshot reported by an agent. */
 export interface SysmonSnapshot {
   id: number;
   agent_name: string;
@@ -16,6 +22,7 @@ export interface SysmonSnapshot {
   collected_at: number;
 }
 
+/** Per-mountpoint disk usage. */
 export interface SysmonDisk {
   agent_name: string;
   mount_point: string;
@@ -25,12 +32,14 @@ export interface SysmonDisk {
   avail_bytes: number;
 }
 
+/** Per-agent activity summary used by the agent picker. */
 export interface SysmonAgent {
   name: string;
   snapshot_count: number;
   last_active: number;
 }
 
+/** Single point in a historical CPU/memory time series. */
 export interface HistoryPoint {
   cpu_percent: number;
   mem_used: number;
@@ -38,6 +47,7 @@ export interface HistoryPoint {
   collected_at: number;
 }
 
+/** Fetches the latest snapshot for each agent (or just one if specified). */
 export async function getSysmonCurrent(agent?: string): Promise<SysmonSnapshot[]> {
   const params = agent ? `?agent=${encodeURIComponent(agent)}` : '';
   const res = await fetch(`/api/sysmon/current${params}`);
@@ -45,6 +55,7 @@ export async function getSysmonCurrent(agent?: string): Promise<SysmonSnapshot[]
   return res.json();
 }
 
+/** Fetches historical CPU/memory points over the requested window. */
 export async function getSysmonHistory(agent?: string, hours = 1): Promise<HistoryPoint[]> {
   const params = new URLSearchParams();
   if (agent) params.set('agent', agent);
@@ -54,6 +65,7 @@ export async function getSysmonHistory(agent?: string, hours = 1): Promise<Histo
   return res.json();
 }
 
+/** Fetches per-mountpoint disk usage for the given agent (or all agents). */
 export async function getSysmonDisks(agent?: string): Promise<SysmonDisk[]> {
   const params = agent ? `?agent=${encodeURIComponent(agent)}` : '';
   const res = await fetch(`/api/sysmon/disks${params}`);
@@ -61,6 +73,7 @@ export async function getSysmonDisks(agent?: string): Promise<SysmonDisk[]> {
   return res.json();
 }
 
+/** Lists all agents that have reported sysmon snapshots. */
 export async function getSysmonAgents(): Promise<SysmonAgent[]> {
   const res = await fetch('/api/sysmon/agents');
   if (!res.ok) throw new Error('Failed to get sysmon agents');

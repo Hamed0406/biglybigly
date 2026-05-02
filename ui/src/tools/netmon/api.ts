@@ -1,5 +1,12 @@
+/**
+ * NetMon API client.
+ *
+ * Typed fetch wrappers for `/api/netmon/*` — flow listings, top hosts/ports,
+ * aggregate stats, the topology graph, and DNS hostname mappings.
+ */
 const API_BASE = '/api/netmon';
 
+/** A deduplicated network flow observed by an agent. */
 export interface Flow {
   id: number;
   agent_name: string;
@@ -17,11 +24,13 @@ export interface Flow {
   last_seen: number;
 }
 
+/** Generic name+count row used by top-hosts and top-ports endpoints. */
 export interface TopEntry {
   name: string;
   count: number;
 }
 
+/** Aggregate counters for the active agent or the whole fleet. */
 export interface Stats {
   total_flows: number;
   total_hosts: number;
@@ -29,12 +38,14 @@ export interface Stats {
   unique_agents: number;
 }
 
+/** Per-agent activity summary used by the agent picker. */
 export interface AgentInfo {
   name: string;
   flow_count: number;
   last_active: number;
 }
 
+/** Fetches recent flows, optionally filtered by agent, protocol, or substring. */
 export async function getFlows(params?: {
   search?: string;
   agent?: string;
@@ -51,6 +62,7 @@ export async function getFlows(params?: {
   return res.json();
 }
 
+/** Fetches the most-contacted remote hosts. */
 export async function getTopHosts(limit?: number, agent?: string): Promise<TopEntry[]> {
   const query = new URLSearchParams();
   if (limit) query.set('limit', String(limit));
@@ -60,6 +72,7 @@ export async function getTopHosts(limit?: number, agent?: string): Promise<TopEn
   return res.json();
 }
 
+/** Fetches the most-contacted remote ports. */
 export async function getTopPorts(agent?: string): Promise<TopEntry[]> {
   const query = new URLSearchParams();
   if (agent) query.set('agent', agent);
@@ -68,6 +81,7 @@ export async function getTopPorts(agent?: string): Promise<TopEntry[]> {
   return res.json();
 }
 
+/** Fetches aggregate flow / host counts. */
 export async function getStats(agent?: string): Promise<Stats> {
   const query = new URLSearchParams();
   if (agent) query.set('agent', agent);
@@ -76,12 +90,14 @@ export async function getStats(agent?: string): Promise<Stats> {
   return res.json();
 }
 
+/** Lists all agents that have reported network flows. */
 export async function getAgents(): Promise<AgentInfo[]> {
   const res = await fetch(`${API_BASE}/agents`);
   if (!res.ok) throw new Error('Failed to get agents');
   return res.json();
 }
 
+/** A node in the network topology graph (an agent or a remote host). */
 export interface GraphNode {
   id: string;
   label: string;
@@ -89,6 +105,7 @@ export interface GraphNode {
   size: number;
 }
 
+/** A directed edge between two graph nodes describing observed traffic. */
 export interface GraphEdge {
   source: string;
   target: string;
@@ -97,11 +114,13 @@ export interface GraphEdge {
   count: number;
 }
 
+/** Force-graph payload consumed by <NetworkMap />. */
 export interface GraphData {
   nodes: GraphNode[];
   edges: GraphEdge[];
 }
 
+/** Fetches the current topology graph. */
 export async function getGraph(agent?: string): Promise<GraphData> {
   const query = new URLSearchParams();
   if (agent) query.set('agent', agent);
@@ -110,6 +129,7 @@ export async function getGraph(agent?: string): Promise<GraphData> {
   return res.json();
 }
 
+/** A single IP↔hostname mapping observed via reverse DNS. */
 export interface HostnameRecord {
   ip: string;
   hostname: string;
@@ -119,6 +139,7 @@ export interface HostnameRecord {
   seen_count: number;
 }
 
+/** Aggregate counters for the hostname/IP cache. */
 export interface HostnameStats {
   total_mappings: number;
   unique_ips: number;
@@ -127,6 +148,7 @@ export interface HostnameStats {
   last_updated: number;
 }
 
+/** Fetches all known hostname mappings, optionally filtered. */
 export async function getHostnames(params?: { agent?: string; search?: string }): Promise<HostnameRecord[]> {
   const query = new URLSearchParams();
   if (params?.agent) query.set('agent', params.agent);
@@ -136,6 +158,7 @@ export async function getHostnames(params?: { agent?: string; search?: string })
   return res.json();
 }
 
+/** Fetches hostname mappings observed in the recent past. */
 export async function getRecentHostnames(agent?: string): Promise<HostnameRecord[]> {
   const query = new URLSearchParams();
   if (agent) query.set('agent', agent);
@@ -144,6 +167,7 @@ export async function getRecentHostnames(agent?: string): Promise<HostnameRecord
   return res.json();
 }
 
+/** Fetches aggregate counters for the hostname cache. */
 export async function getHostnameStats(agent?: string): Promise<HostnameStats> {
   const query = new URLSearchParams();
   if (agent) query.set('agent', agent);

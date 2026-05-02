@@ -11,7 +11,8 @@ import (
 	"time"
 )
 
-// psConnection mirrors the JSON output of Get-NetTCPConnection / Get-NetUDPEndpoint
+// psConnection mirrors the JSON output of Get-NetTCPConnection /
+// Get-NetUDPEndpoint when piped through ConvertTo-Json.
 type psConnection struct {
 	LocalAddress  string `json:"LocalAddress"`
 	LocalPort     int    `json:"LocalPort"`
@@ -21,15 +22,17 @@ type psConnection struct {
 	OwningProcess int    `json:"OwningProcess"`
 }
 
-// psProcess mirrors Get-Process output
+// psProcess mirrors a single record from Get-Process | Select Id,ProcessName.
 type psProcess struct {
 	Id          int    `json:"Id"`
 	ProcessName string `json:"ProcessName"`
 }
 
-// collectPlatform uses PowerShell Get-NetTCPConnection and Get-NetUDPEndpoint
-// for structured, reliable output on Windows.
-// Falls back to netstat if PowerShell collection returns no TCP connections.
+// collectPlatform gathers connections via PowerShell's Get-NetTCPConnection
+// and Get-NetUDPEndpoint cmdlets. If the TCP query returns zero rows
+// (frequently the case when running unelevated under certain Windows builds)
+// it falls back to parsing `netstat -ano`. PIDs are resolved to process
+// names in a single Get-Process call.
 func (c *Collector) collectPlatform() []Flow {
 	var flows []Flow
 
@@ -79,6 +82,8 @@ func (c *Collector) collectPlatform() []Flow {
 	return flows
 }
 
+// collectPS runs a PowerShell snippet that emits ConvertTo-Json output for
+// connection records and parses it into Flow values.
 func collectPS(script, proto string) ([]Flow, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -99,8 +104,9 @@ func collectPS(script, proto string) ([]Flow, error) {
 	return parsePSConnections(out, proto), nil
 }
 
-// collectNetstat falls back to parsing `netstat -ano` output for TCP connections.
-// Works without elevation on all Windows versions.
+// collectNetstat is the fallback path when Get-NetTCPConnection produces no
+// rows. `netstat -ano` works without elevation on every supported Windows
+// version.
 func collectNetstat() ([]Flow, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -113,7 +119,7 @@ func collectNetstat() ([]Flow, error) {
 	return parseNetstat(string(out)), nil
 }
 
-// parseNetstat parses `netstat -ano -p TCP` output lines like:
+// parseNetstat parses `netstat -ano -p TCP` output. Each row has the form:
 //
 //	TCP    192.168.1.50:54321  142.250.74.46:443  ESTABLISHED  1234
 func parseNetstat(output string) []Flow {
@@ -150,7 +156,7 @@ func parseNetstat(output string) []Flow {
 	return flows
 }
 
-// splitNetstatAddr splits "192.168.1.50:443" or "[::1]:443" into IP and port
+// splitNetstatAddr splits "192.168.1.50:443" or "[::1]:443" into IP and port.
 func splitNetstatAddr(addr string) (string, int) {
 	// Handle IPv6 bracket notation [::1]:port
 	if strings.HasPrefix(addr, "[") {
@@ -176,6 +182,9 @@ func splitNetstatAddr(addr string) (string, int) {
 	return ip, port
 }
 
+// parsePSConnections decodes ConvertTo-Json output for a list of connections.
+// PowerShell emits a single object (not array) when there is exactly one
+// result, so both shapes are accepted.
 func parsePSConnections(data []byte, proto string) []Flow {
 	// PowerShell outputs a single object (not array) if there's only one result
 	var conns []psConnection
@@ -202,7 +211,8 @@ func parsePSConnections(data []byte, proto string) []Flow {
 	return flows
 }
 
-// resolveProcessNames gets process names for all unique PIDs in one call
+// resolveProcessNames maps PIDs to ProcessName using a single Get-Process
+// call, avoiding one PowerShell invocation per flow.
 func resolveProcessNames(flows []Flow) map[int]string {
 	pids := make(map[int]bool)
 	for _, f := range flows {
@@ -237,6 +247,8 @@ func resolveProcessNames(flows []Flow) map[int]string {
 	return result
 }
 
+// mapWindowsState translates Get-NetTCPConnection's CamelCase state names to
+// the SCREAMING_SNAKE_CASE form used by the rest of the platform.
 func mapWindowsState(state string) string {
 	switch state {
 	case "Established":

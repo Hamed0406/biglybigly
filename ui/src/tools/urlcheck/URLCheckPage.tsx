@@ -1,6 +1,13 @@
+/**
+ * Module page for the URL Monitor tool.
+ *
+ * Lets the operator add URLs, trigger on-demand HTTP checks, view the latest
+ * status code per URL, and inspect a per-URL history log when one is selected.
+ */
 import { listURLs, addURL, checkURL, getHistory, deleteURL } from './api';
 import { useState, useEffect } from 'react';
 
+/** Local mirror of the API `URL` type (kept independent from the global URL ctor). */
 interface URL {
   id: number;
   url: string;
@@ -10,6 +17,7 @@ interface URL {
   updated_at: number;
 }
 
+/** Local mirror of the API `HistoryEntry` type. */
 interface HistoryEntry {
   id: number;
   status: number;
@@ -18,6 +26,7 @@ interface HistoryEntry {
   checked_at: number;
 }
 
+/** Page component for the URL Monitor module. */
 export default function URLCheckPage() {
   const [urls, setUrls] = useState<URL[]>([]);
   const [newURL, setNewURL] = useState('');

@@ -103,7 +103,8 @@ func parseLsofAddr(name, proto string) *Flow {
 	}
 }
 
-// splitHostPort splits "addr:port" handling IPv6 bracket notation
+// splitHostPort splits "addr:port", correctly handling IPv6 bracket notation
+// "[::1]:port".
 func splitHostPort(s string) (string, int) {
 	// Handle IPv6 [::1]:port
 	if strings.HasPrefix(s, "[") {

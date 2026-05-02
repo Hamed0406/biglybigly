@@ -1,3 +1,15 @@
+/**
+ * Module page for the DNS Filter tool.
+ *
+ * Tabbed UI with four views:
+ *   - dashboard: top blocked / top queried domains
+ *   - log:       recent query log (with search and blocked-only filter)
+ *   - blocklists: subscribed blocklist URLs (add / remove / refresh)
+ *   - rules:     user-defined allow/deny rules (override blocklists)
+ *
+ * All four views share the same data fetched in `loadData`, optionally scoped
+ * to a single agent. Auto-refreshes every 5 seconds while enabled.
+ */
 import { useState, useEffect, useCallback } from 'react';
 import {
   getDNSStats, getDNSQueries, getDNSAgents, getBlocklists, getRules,
@@ -5,6 +17,7 @@ import {
   DNSStats, DNSQuery, DNSAgent, DNSBlocklist, DNSRule,
 } from './api';
 
+/** Format a Unix timestamp as a relative duration like `5m ago`. */
 function formatAgo(ts: number): string {
   if (!ts) return '-';
   const secs = Math.floor(Date.now() / 1000 - ts);
@@ -14,17 +27,20 @@ function formatAgo(ts: number): string {
   return `${Math.floor(secs / 86400)}d ago`;
 }
 
+/** Format a Unix timestamp as a wall-clock time using the user's locale. */
 function formatTime(ts: number): string {
   if (!ts) return '-';
   return new Date(ts * 1000).toLocaleTimeString();
 }
 
+/** Compact a number using K/M suffixes. */
 function formatNumber(n: number): string {
   if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
   if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
   return String(n);
 }
 
+/** Tabbed page for managing the DNS Filter module. */
 export default function DNSFilterPage() {
   const [stats, setStats] = useState<DNSStats | null>(null);
   const [queries, setQueries] = useState<DNSQuery[]>([]);

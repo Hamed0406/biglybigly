@@ -6,13 +6,16 @@ import (
 	"os"
 )
 
+// platformChecks returns the Linux-specific preflight checks: read
+// access to /proc/net (required for connection collection) and a
+// privilege probe used to warn when running unprivileged.
 func platformChecks() []CheckResult {
 	var results []CheckResult
 
-	// 1. /proc/net access — required for connection collection
+	// /proc/net access — required for connection collection.
 	results = append(results, checkProcNet())
 
-	// 2. Root or NET_ADMIN — for full PID info
+	// Root or NET_ADMIN — needed to see PIDs for all sockets.
 	results = append(results, checkPrivileges())
 
 	return results

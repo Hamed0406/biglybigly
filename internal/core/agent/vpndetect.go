@@ -5,15 +5,21 @@ import (
 	"runtime"
 )
 
-// VPNInfo holds detected VPN/proxy information
+// VPNInfo describes a detected VPN or proxy: its display name, the
+// underlying interface (or "detected via process list" when discovered
+// only via running processes), and any DNS servers it has pinned for
+// that adapter (currently populated on Windows).
 type VPNInfo struct {
 	Name      string
 	Interface string
 	DNS       []string
 }
 
-// DetectVPN checks for active VPN or proxy connections and logs guidance.
-// Returns true if a VPN was detected.
+// DetectVPN inspects the host for active VPN/proxy software (via the
+// per-OS detectVPNs implementation) and, if any are found, logs an
+// operator-friendly warning explaining that the tunnel may bypass the
+// local DNS filter and how to reconfigure each common client to point
+// at 127.0.0.1. Returns true when at least one VPN/proxy was detected.
 func DetectVPN(logger *slog.Logger) bool {
 	vpns := detectVPNs()
 	if len(vpns) == 0 {

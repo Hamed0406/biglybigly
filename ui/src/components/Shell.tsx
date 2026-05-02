@@ -1,12 +1,21 @@
+/**
+ * Application chrome: dark sidebar (Dashboard + module list) plus a top bar
+ * displaying the active module's name. Renders the routed page as `children`.
+ */
 import { Module } from '../types'
 
 interface ShellProps {
+  /** Modules registered on the server, used to populate the sidebar. */
   modules: Module[]
+  /** Currently selected module id, or `null` for the Dashboard view. */
   currentModule: string | null
+  /** Notifies the parent that the user picked a different sidebar entry. */
   onSelectModule: (id: string | null) => void
+  /** The active page rendered in the main content area. */
   children: React.ReactNode
 }
 
+/** Sidebar + topbar layout shared by every authenticated page. */
 export default function Shell({ modules, currentModule, onSelectModule, children }: ShellProps) {
   return (
     <div style={{ display: 'flex', height: '100vh', fontFamily: 'sans-serif' }}>

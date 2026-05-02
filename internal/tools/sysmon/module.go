@@ -1,3 +1,8 @@
+// Package sysmon collects per-host system metrics (CPU, memory, load,
+// uptime, hostname, OS info, disk usage) from each connected agent and
+// stores them as time-stamped snapshots. Agents push snapshots to the
+// server's /api/sysmon/ingest endpoint; the UI renders the latest values
+// and time-series history.
 package sysmon
 
 import (
@@ -8,21 +13,31 @@ import (
 	"github.com/hamed0406/biglybigly/internal/platform"
 )
 
+// Module is the sysmon platform.Module implementation.
 type Module struct {
 	p platform.Platform
 }
 
+// New constructs an uninitialized sysmon module.
 func New() *Module {
 	return &Module{}
 }
 
+// ID returns the stable module identifier used as the route and table prefix.
 func (m *Module) ID() string      { return "sysmon" }
+
+// Name returns the human-readable module name shown in the UI.
 func (m *Module) Name() string    { return "System Monitor" }
+
+// Version returns the module's semantic version.
 func (m *Module) Version() string { return "0.1.0" }
+
+// Icon returns the inline SVG icon rendered in the sidebar.
 func (m *Module) Icon() string {
 	return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/><path d="M7 10l3-3 2 2 4-4"/></svg>`
 }
 
+// Migrate creates sysmon_snapshots and sysmon_disks tables. Idempotent.
 func (m *Module) Migrate(db *sql.DB) error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS sysmon_snapshots (
@@ -65,6 +80,8 @@ func (m *Module) Migrate(db *sql.DB) error {
 	return err
 }
 
+// Init registers HTTP routes for current/history/disk views, the agent list,
+// and the agent ingest endpoint.
 func (m *Module) Init(p platform.Platform) error {
 	m.p = p
 	mux := p.Mux()
@@ -83,6 +100,7 @@ func (m *Module) Init(p platform.Platform) error {
 	return nil
 }
 
+// Start launches the periodic 24h snapshot retention cleanup. Blocks on ctx.
 func (m *Module) Start(ctx context.Context) error {
 	// Start cleanup goroutine to remove old snapshots (keep 24h)
 	go m.runCleanup(ctx)
@@ -90,10 +108,13 @@ func (m *Module) Start(ctx context.Context) error {
 	return nil
 }
 
+// AgentCapable reports that sysmon collects data on remote agents.
 func (m *Module) AgentCapable() bool {
 	return true
 }
 
+// AgentStart is the agent-side entry point. Snapshot collection is driven
+// by the agent runtime; this just blocks until shutdown.
 func (m *Module) AgentStart(ctx context.Context, conn platform.AgentConn) error {
 	<-ctx.Done()
 	return nil

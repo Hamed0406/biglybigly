@@ -6,7 +6,8 @@ import (
 	"time"
 )
 
-// SystemSnapshot holds a point-in-time system measurement
+// SystemSnapshot is a point-in-time measurement of one host. It mirrors a
+// row in sysmon_snapshots plus the associated disk rows.
 type SystemSnapshot struct {
 	CPUPercent   float64    `json:"cpu_percent"`
 	MemTotal     uint64     `json:"mem_total"`
@@ -22,7 +23,7 @@ type SystemSnapshot struct {
 	CollectedAt  int64      `json:"collected_at"`
 }
 
-// DiskInfo holds usage data for a single filesystem/mount
+// DiskInfo describes usage for one mounted filesystem.
 type DiskInfo struct {
 	MountPoint string `json:"mount_point"`
 	FSType     string `json:"fs_type"`
@@ -31,7 +32,8 @@ type DiskInfo struct {
 	AvailBytes uint64 `json:"avail_bytes"`
 }
 
-// Collector gathers system metrics, keeping previous CPU sample for delta calculation
+// Collector gathers system metrics. CPU usage requires two samples to
+// compute, so the previous sample is retained between calls under mu.
 type Collector struct {
 	logger   *slog.Logger
 	mu       sync.Mutex
@@ -39,17 +41,20 @@ type Collector struct {
 	prevTime time.Time
 }
 
-// cpuSample holds raw CPU tick counts for delta-based percentage calculation
+// cpuSample is a raw CPU tick snapshot used to compute a percentage by delta.
 type cpuSample struct {
 	idle  uint64
 	total uint64
 }
 
+// NewCollector returns a Collector ready for repeated Collect calls.
 func NewCollector(logger *slog.Logger) *Collector {
 	return &Collector{logger: logger}
 }
 
-// Collect gathers a full system snapshot using platform-specific implementations
+// Collect gathers a full SystemSnapshot using platform-specific helpers.
+// The first call returns 0 for CPUPercent because there is no prior sample
+// to delta against.
 func (c *Collector) Collect() (*SystemSnapshot, error) {
 	snap := &SystemSnapshot{
 		CollectedAt: time.Now().Unix(),

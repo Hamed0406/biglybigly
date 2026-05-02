@@ -10,6 +10,10 @@ import (
 
 // --- Ingest ---
 
+// handleIngest receives a SystemSnapshot from a remote agent and inserts (or
+// updates, on (agent_name, collected_at) collision) the snapshot row plus its
+// per-disk children. Unauthenticated; the agent self-identifies via the
+// payload's "agent" field.
 func (m *Module) handleIngest(w http.ResponseWriter, r *http.Request) {
 	logger := m.p.Log()
 
@@ -81,6 +85,7 @@ func (m *Module) handleIngest(w http.ResponseWriter, r *http.Request) {
 
 // --- Current (latest snapshot per agent) ---
 
+// SnapshotRow is one row of sysmon_snapshots returned by the API.
 type SnapshotRow struct {
 	ID           int64   `json:"id"`
 	AgentName    string  `json:"agent_name"`
@@ -97,6 +102,8 @@ type SnapshotRow struct {
 	CollectedAt  int64   `json:"collected_at"`
 }
 
+// handleCurrent returns the latest snapshot per agent (or only the requested
+// agent's latest snapshot when the "agent" query parameter is set).
 func (m *Module) handleCurrent(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
 	agent := r.URL.Query().Get("agent")
@@ -155,13 +162,17 @@ func (m *Module) handleCurrent(w http.ResponseWriter, r *http.Request) {
 
 // --- History (time-series for charts) ---
 
+// HistoryPoint is a single time-series sample used for CPU/memory charts.
 type HistoryPoint struct {
-	CPUPercent   float64 `json:"cpu_percent"`
-	MemUsed      uint64  `json:"mem_used"`
-	MemTotal     uint64  `json:"mem_total"`
-	CollectedAt  int64   `json:"collected_at"`
+	CPUPercent  float64 `json:"cpu_percent"`
+	MemUsed     uint64  `json:"mem_used"`
+	MemTotal    uint64  `json:"mem_total"`
+	CollectedAt int64   `json:"collected_at"`
 }
 
+// handleHistory returns CPU/memory time series for the last N hours
+// (default 1, max 168). With no agent filter the result interleaves all
+// agents in chronological order — callers typically pass ?agent=…
 func (m *Module) handleHistory(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
 	agent := r.URL.Query().Get("agent")
@@ -213,6 +224,7 @@ func (m *Module) handleHistory(w http.ResponseWriter, r *http.Request) {
 
 // --- Disks ---
 
+// DiskRow is a per-mount disk-usage entry returned to the UI.
 type DiskRow struct {
 	AgentName  string `json:"agent_name"`
 	MountPoint string `json:"mount_point"`
@@ -222,6 +234,8 @@ type DiskRow struct {
 	AvailBytes uint64 `json:"avail_bytes"`
 }
 
+// handleDisks returns the disk rows attached to the latest snapshot per
+// agent (or the latest snapshot of the named agent).
 func (m *Module) handleDisks(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
 	agent := r.URL.Query().Get("agent")
@@ -275,6 +289,8 @@ func (m *Module) handleDisks(w http.ResponseWriter, r *http.Request) {
 
 // --- Agents ---
 
+// handleAgents lists agents that have submitted snapshots, with totals and
+// last-active timestamps.
 func (m *Module) handleAgents(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
 
@@ -314,6 +330,7 @@ func (m *Module) handleAgents(w http.ResponseWriter, r *http.Request) {
 
 // --- Cleanup ---
 
+// runCleanup drives cleanup hourly until ctx is cancelled.
 func (m *Module) runCleanup(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Hour)
 	defer ticker.Stop()
@@ -328,6 +345,7 @@ func (m *Module) runCleanup(ctx context.Context) {
 	}
 }
 
+// cleanup deletes snapshots (and their child disk rows) older than 24 hours.
 func (m *Module) cleanup() {
 	db := m.p.DB()
 	cutoff := time.Now().Unix() - 86400 // 24 hours

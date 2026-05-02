@@ -31,6 +31,12 @@ func (m *Module) runHostnameEnricher(ctx context.Context) {
 	}
 }
 
+// enrichHostnames runs one pass: it folds every (agent, ip, hostname) seen
+// in netmon_flows into netmon_hostname_history (so changes over time are
+// preserved per agent), then resolves up to 50 still-unresolved IPs via
+// reverse DNS, caches results in netmon_dns_cache, back-fills the hostname
+// column on netmon_flows, and records the new mappings in the history table
+// for every agent that has talked to that IP.
 func (m *Module) enrichHostnames(ctx context.Context, db *sql.DB, logger *slog.Logger) {
 	// Collect flows with hostnames into memory first to avoid holding the DB connection
 	type flowMapping struct {

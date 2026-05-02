@@ -1,9 +1,16 @@
+/**
+ * Module page for the System Monitor tool.
+ *
+ * Per-agent CPU, memory, load, uptime, OS info and disk usage. Renders gauges
+ * for current values and SVG sparklines for short-term history.
+ */
 import { useState, useEffect, useCallback } from 'react';
 import {
   getSysmonCurrent, getSysmonHistory, getSysmonDisks, getSysmonAgents,
   SysmonSnapshot, SysmonDisk, SysmonAgent, HistoryPoint,
 } from './api';
 
+/** Format a byte count using binary (1024) units. */
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -11,6 +18,7 @@ function formatBytes(bytes: number): string {
   return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
 }
 
+/** Format a duration (in seconds) as `Xd Yh Zm`, dropping leading zeros. */
 function formatUptime(secs: number): string {
   const days = Math.floor(secs / 86400);
   const hours = Math.floor((secs % 86400) / 3600);
@@ -20,6 +28,7 @@ function formatUptime(secs: number): string {
   return `${mins}m`;
 }
 
+/** Format a Unix timestamp as a relative duration like `5m ago`. */
 function formatAgo(ts: number): string {
   if (!ts) return '-';
   const secs = Math.floor(Date.now() / 1000 - ts);
@@ -28,7 +37,7 @@ function formatAgo(ts: number): string {
   return `${Math.floor(secs / 3600)}h ago`;
 }
 
-// Simple SVG sparkline component
+/** Lightweight SVG sparkline that auto-scales to its data range. */
 function Sparkline({ data, width = 300, height = 60, color = '#3b82f6' }: {
   data: number[]; width?: number; height?: number; color?: string;
 }) {
@@ -55,7 +64,7 @@ function Sparkline({ data, width = 300, height = 60, color = '#3b82f6' }: {
   );
 }
 
-// Gauge component for CPU/Memory
+/** Card with a labelled value and a horizontal progress bar (CPU / memory). */
 function Gauge({ value, max, label, unit, color }: {
   value: number; max: number; label: string; unit: string; color: string;
 }) {
@@ -85,6 +94,7 @@ function Gauge({ value, max, label, unit, color }: {
   );
 }
 
+/** Per-agent CPU / memory / load / uptime / disk dashboard. */
 export default function SysMonPage() {
   const [snapshots, setSnapshots] = useState<SysmonSnapshot[]>([]);
   const [history, setHistory] = useState<HistoryPoint[]>([]);

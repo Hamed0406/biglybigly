@@ -7,13 +7,15 @@ import (
 	"os/exec"
 )
 
+// platformChecks returns the macOS-specific preflight checks: presence
+// of lsof (used by the connection collector) and a privilege probe.
 func platformChecks() []CheckResult {
 	var results []CheckResult
 
-	// 1. lsof — required for connection collection on macOS
+	// lsof — required for connection collection on macOS.
 	results = append(results, checkLsof())
 
-	// 2. Root — for full PID/process info
+	// Root — needed for full PID/process info on other users' sockets.
 	results = append(results, checkPrivilegesDarwin())
 
 	return results

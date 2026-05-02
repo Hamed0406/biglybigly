@@ -1,7 +1,16 @@
+/**
+ * Module page for the Network Monitor tool.
+ *
+ * Tabbed UI showing observed connections (flows), top remote hosts/ports, the
+ * network topology graph, and the agent's hostname/IP cache. All views share a
+ * single fetch cycle and can be scoped to a specific agent. Auto-refreshes
+ * every 10 seconds while enabled.
+ */
 import { useState, useEffect, useCallback } from 'react';
 import { getFlows, getTopHosts, getTopPorts, getStats, getAgents, getGraph, getHostnames, getHostnameStats, Flow, TopEntry, Stats, AgentInfo, GraphData, HostnameRecord, HostnameStats as HStats } from './api';
 import NetworkMap from './NetworkMap';
 
+/** Tabbed page for the NetMon module. */
 export default function NetMonPage() {
   const [flows, setFlows] = useState<Flow[]>([]);
   const [topHosts, setTopHosts] = useState<TopEntry[]>([]);

@@ -1,5 +1,13 @@
+/**
+ * Home/landing page.
+ *
+ * Aggregates platform-wide signals into a single overview: agent counts and
+ * health, DNS query/block totals, top blocked/queried domains, recent block
+ * events, and any URLs currently down. Polls `/api/dashboard` every 10s.
+ */
 import { useState, useEffect, useCallback } from 'react';
 
+/** Shape of the JSON payload returned by `/api/dashboard`. */
 interface DashboardData {
   agent_count: number;
   agents_online: number;
@@ -22,6 +30,7 @@ interface DashboardData {
   recent_blocks: { domain: string; agent: string; timestamp: number }[];
 }
 
+/** Format an uptime duration in seconds as `Xd Yh`, `Xh Ym`, or `Xm`. */
 function formatUptime(secs: number): string {
   if (secs <= 0) return '-';
   const d = Math.floor(secs / 86400);
@@ -32,12 +41,14 @@ function formatUptime(secs: number): string {
   return `${m}m`;
 }
 
+/** Compact a number using K/M suffixes (e.g. 1.2K, 3.4M). */
 function formatNumber(n: number): string {
   if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
   if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
   return String(n);
 }
 
+/** Format a Unix timestamp as a human-friendly relative time. */
 function formatAgo(ts: number): string {
   if (!ts) return '-';
   const secs = Math.floor(Date.now() / 1000 - ts);
@@ -47,10 +58,12 @@ function formatAgo(ts: number): string {
   return `${Math.floor(secs / 86400)}d ago`;
 }
 
+/** True if the agent has reported within the last 5 minutes. */
 function isOnline(lastSeen: number): boolean {
   return (Date.now() / 1000 - lastSeen) < 300;
 }
 
+/** Aggregated landing page; auto-refreshes every 10 seconds. */
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);

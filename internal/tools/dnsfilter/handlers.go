@@ -10,22 +10,26 @@ import (
 
 // --- Stats ---
 
+// StatsResponse is the payload returned by GET /api/dnsfilter/stats.
 type StatsResponse struct {
-	TotalQueries   int     `json:"total_queries"`
-	BlockedQueries int     `json:"blocked_queries"`
-	BlockedPercent float64 `json:"blocked_percent"`
-	UniqueClients  int     `json:"unique_clients"`
-	UniqueDomains  int     `json:"unique_domains"`
-	BlocklistSize  int     `json:"blocklist_size"`
+	TotalQueries   int         `json:"total_queries"`
+	BlockedQueries int         `json:"blocked_queries"`
+	BlockedPercent float64     `json:"blocked_percent"`
+	UniqueClients  int         `json:"unique_clients"`
+	UniqueDomains  int         `json:"unique_domains"`
+	BlocklistSize  int         `json:"blocklist_size"`
 	TopBlocked     []TopDomain `json:"top_blocked"`
 	TopQueried     []TopDomain `json:"top_queried"`
 }
 
+// TopDomain is a domain/count pair used in stats top-N lists.
 type TopDomain struct {
 	Domain string `json:"domain"`
 	Count  int    `json:"count"`
 }
 
+// handleStats returns aggregate query stats over the last N hours (default 24,
+// max 168), optionally filtered to a single agent.
 func (m *Module) handleStats(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
 	agent := r.URL.Query().Get("agent")
@@ -112,6 +116,8 @@ func (m *Module) handleStats(w http.ResponseWriter, r *http.Request) {
 
 // --- Query Log ---
 
+// QueryRow is one row from the dnsfilter_queries table as returned by the
+// query log API.
 type QueryRow struct {
 	ID         int    `json:"id"`
 	AgentName  string `json:"agent_name"`
@@ -124,6 +130,8 @@ type QueryRow struct {
 	Timestamp  int64  `json:"timestamp"`
 }
 
+// handleQueries returns the most recent DNS queries (default 200, max 1000)
+// with optional agent / search / blocked-only filters.
 func (m *Module) handleQueries(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
 	agent := r.URL.Query().Get("agent")
@@ -183,6 +191,8 @@ func (m *Module) handleQueries(w http.ResponseWriter, r *http.Request) {
 
 // --- Agents ---
 
+// handleAgents lists agents that have submitted DNS queries, with totals and
+// last-active timestamps.
 func (m *Module) handleAgents(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
 
@@ -225,6 +235,7 @@ func (m *Module) handleAgents(w http.ResponseWriter, r *http.Request) {
 
 // --- Blocklist Management ---
 
+// BlocklistRow is a row from the dnsfilter_blocklists table.
 type BlocklistRow struct {
 	ID          int    `json:"id"`
 	URL         string `json:"url"`
@@ -235,6 +246,7 @@ type BlocklistRow struct {
 	CreatedAt   int64  `json:"created_at"`
 }
 
+// handleListBlocklists returns all configured blocklists.
 func (m *Module) handleListBlocklists(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
 
@@ -263,6 +275,8 @@ func (m *Module) handleListBlocklists(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(lists)
 }
 
+// handleAddBlocklist registers a new blocklist URL. The actual contents are
+// fetched lazily on the next refresh.
 func (m *Module) handleAddBlocklist(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
 
@@ -294,6 +308,8 @@ func (m *Module) handleAddBlocklist(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
+// handleDeleteBlocklist removes a blocklist by id. Cached in-memory entries
+// remain until the next refresh.
 func (m *Module) handleDeleteBlocklist(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
 	id := r.PathValue("id")
@@ -308,6 +324,8 @@ func (m *Module) handleDeleteBlocklist(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
+// handleRefreshBlocklists triggers an asynchronous LoadFromDB on the agent's
+// blocklist manager, re-downloading all enabled lists.
 func (m *Module) handleRefreshBlocklists(w http.ResponseWriter, r *http.Request) {
 	if m.blocklist == nil {
 		http.Error(w, `{"error":"blocklist manager not initialized"}`, http.StatusServiceUnavailable)
@@ -326,6 +344,7 @@ func (m *Module) handleRefreshBlocklists(w http.ResponseWriter, r *http.Request)
 
 // --- Custom Rules ---
 
+// RuleRow is a custom block/allow rule.
 type RuleRow struct {
 	ID        int    `json:"id"`
 	Domain    string `json:"domain"`
@@ -333,6 +352,7 @@ type RuleRow struct {
 	CreatedAt int64  `json:"created_at"`
 }
 
+// handleListRules returns all custom rules.
 func (m *Module) handleListRules(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
 
@@ -359,6 +379,9 @@ func (m *Module) handleListRules(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(rules)
 }
 
+// handleAddRule adds a custom block/allow rule. The input is run through
+// extractDomainFromInput so users can paste full URLs. Reloads the in-memory
+// blocklist asynchronously.
 func (m *Module) handleAddRule(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
 
@@ -402,6 +425,8 @@ func (m *Module) handleAddRule(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
+// handleDeleteRule removes a custom rule by id and triggers an in-memory
+// blocklist reload.
 func (m *Module) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
 	id := r.PathValue("id")
@@ -423,6 +448,9 @@ func (m *Module) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
 
 // --- Ingest (agent submits query logs) ---
 
+// handleIngest accepts a batch of QueryLog entries from an agent and inserts
+// them into dnsfilter_queries inside a single transaction. Unauthenticated by
+// design; agents identify themselves via the payload's "agent" field.
 func (m *Module) handleIngest(w http.ResponseWriter, r *http.Request) {
 	logger := m.p.Log()
 
@@ -492,6 +520,8 @@ func (m *Module) handleIngest(w http.ResponseWriter, r *http.Request) {
 
 // --- Cleanup ---
 
+// runCleanup deletes query log entries older than 7 days, hourly, until ctx
+// is cancelled.
 func (m *Module) runCleanup(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Hour)
 	defer ticker.Stop()

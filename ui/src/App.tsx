@@ -1,3 +1,14 @@
+/**
+ * Application root.
+ *
+ * Responsibilities:
+ *  - Run the first-run setup check (`/api/setup/status`); show <SetupPage /> if
+ *    setup hasn't been completed yet.
+ *  - Load the list of registered modules from `/api/modules` and pass them to
+ *    the <Shell /> for rendering the sidebar.
+ *  - Route between the dashboard (when no module is selected) and the selected
+ *    module's page using a static id → component map.
+ */
 import { useState, useEffect } from 'react'
 import { getModules } from './api/client'
 import { Module } from './types'
@@ -9,6 +20,8 @@ import NetMonPage from './tools/netmon/NetMonPage'
 import SysMonPage from './tools/sysmon/SysMonPage'
 import DNSFilterPage from './tools/dnsfilter/DNSFilterPage'
 
+// Static mapping of module id → page component. Adding a module to the platform
+// requires adding a corresponding entry here.
 const modulePages: { [key: string]: React.ComponentType } = {
   urlcheck: URLCheckPage,
   netmon: NetMonPage,
@@ -16,6 +29,7 @@ const modulePages: { [key: string]: React.ComponentType } = {
   dnsfilter: DNSFilterPage,
 }
 
+/** Top-level component that wires setup, module loading, and navigation. */
 export default function App() {
   const [modules, setModules] = useState<Module[]>([])
   const [currentModule, setCurrentModule] = useState<string | null>(null)
@@ -38,7 +52,8 @@ export default function App() {
         setLoading(false)
       }
     } catch {
-      // If setup endpoint fails, assume complete (backward compat)
+      // If the setup endpoint is missing (older server build), assume the
+      // instance is already configured rather than blocking the UI.
       setSetupComplete(true)
       loadModules()
     }
@@ -67,6 +82,7 @@ export default function App() {
     }} />
   }
 
+  // currentModule === null means "Dashboard" (the home view).
   const CurrentPage = currentModule ? modulePages[currentModule] : null
 
   return (

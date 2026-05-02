@@ -1,5 +1,11 @@
-// DNS Filter API client
+/**
+ * DNS Filter API client.
+ *
+ * Typed fetch wrappers for the `/api/dnsfilter/*` endpoints (stats, query log,
+ * blocklists, allow/deny rules, and per-agent breakdowns).
+ */
 
+/** Aggregate query/block counts over a time window. */
 export interface DNSStats {
   total_queries: number;
   blocked_queries: number;
@@ -11,11 +17,13 @@ export interface DNSStats {
   top_queried: TopDomain[];
 }
 
+/** Domain plus the number of times it appeared in the queried window. */
 export interface TopDomain {
   domain: string;
   count: number;
 }
 
+/** A single DNS query as recorded in the log. */
 export interface DNSQuery {
   id: number;
   agent_name: string;
@@ -28,6 +36,7 @@ export interface DNSQuery {
   timestamp: number;
 }
 
+/** A subscribed remote blocklist (e.g. a hosts-file URL). */
 export interface DNSBlocklist {
   id: number;
   url: string;
@@ -38,6 +47,7 @@ export interface DNSBlocklist {
   created_at: number;
 }
 
+/** A user-defined allow/deny rule that overrides blocklists. */
 export interface DNSRule {
   id: number;
   domain: string;
@@ -45,6 +55,7 @@ export interface DNSRule {
   created_at: number;
 }
 
+/** Per-agent activity summary used by the agent picker. */
 export interface DNSAgent {
   name: string;
   query_count: number;
@@ -52,6 +63,7 @@ export interface DNSAgent {
   last_active: number;
 }
 
+/** Fetches aggregate DNS stats, optionally scoped to one agent and time window. */
 export async function getDNSStats(agent?: string, hours = 24): Promise<DNSStats> {
   const params = new URLSearchParams();
   if (agent) params.set('agent', agent);
@@ -61,6 +73,7 @@ export async function getDNSStats(agent?: string, hours = 24): Promise<DNSStats>
   return res.json();
 }
 
+/** Fetches the recent DNS query log filtered by agent / search / blocked-only. */
 export async function getDNSQueries(opts?: {
   agent?: string; search?: string; blocked?: boolean; limit?: number;
 }): Promise<DNSQuery[]> {
@@ -74,18 +87,21 @@ export async function getDNSQueries(opts?: {
   return res.json();
 }
 
+/** Lists all agents that have reported DNS activity. */
 export async function getDNSAgents(): Promise<DNSAgent[]> {
   const res = await fetch('/api/dnsfilter/agents');
   if (!res.ok) throw new Error('Failed to get DNS agents');
   return res.json();
 }
 
+/** Lists all configured blocklist subscriptions. */
 export async function getBlocklists(): Promise<DNSBlocklist[]> {
   const res = await fetch('/api/dnsfilter/blocklists');
   if (!res.ok) throw new Error('Failed to get blocklists');
   return res.json();
 }
 
+/** Subscribes to a new blocklist URL with an optional friendly name. */
 export async function addBlocklist(url: string, name: string): Promise<void> {
   const res = await fetch('/api/dnsfilter/blocklists', {
     method: 'POST',
@@ -95,22 +111,26 @@ export async function addBlocklist(url: string, name: string): Promise<void> {
   if (!res.ok) throw new Error('Failed to add blocklist');
 }
 
+/** Removes a blocklist subscription by id. */
 export async function deleteBlocklist(id: number): Promise<void> {
   const res = await fetch(`/api/dnsfilter/blocklists/${id}`, { method: 'DELETE' });
   if (!res.ok) throw new Error('Failed to delete blocklist');
 }
 
+/** Triggers an asynchronous re-download of every blocklist. */
 export async function refreshBlocklists(): Promise<void> {
   const res = await fetch('/api/dnsfilter/blocklists/refresh', { method: 'POST' });
   if (!res.ok) throw new Error('Failed to refresh blocklists');
 }
 
+/** Lists all user-defined allow/deny rules. */
 export async function getRules(): Promise<DNSRule[]> {
   const res = await fetch('/api/dnsfilter/rules');
   if (!res.ok) throw new Error('Failed to get rules');
   return res.json();
 }
 
+/** Adds an allow/deny rule for `domain` (action is typically `allow` or `block`). */
 export async function addRule(domain: string, action: string): Promise<void> {
   const res = await fetch('/api/dnsfilter/rules', {
     method: 'POST',
@@ -120,6 +140,7 @@ export async function addRule(domain: string, action: string): Promise<void> {
   if (!res.ok) throw new Error('Failed to add rule');
 }
 
+/** Deletes a rule by id. */
 export async function deleteRule(id: number): Promise<void> {
   const res = await fetch(`/api/dnsfilter/rules/${id}`, { method: 'DELETE' });
   if (!res.ok) throw new Error('Failed to delete rule');

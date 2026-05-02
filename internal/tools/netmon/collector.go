@@ -11,7 +11,7 @@ import (
 	"github.com/hamed0406/biglybigly/internal/platform"
 )
 
-// Flow represents a single observed network connection
+// Flow represents a single observed network connection.
 type Flow struct {
 	Proto      string `json:"proto"`
 	LocalIP    string `json:"local_ip,omitempty"`
@@ -25,12 +25,15 @@ type Flow struct {
 	SeenAt     int64  `json:"seen_at"`
 }
 
-// Collector polls the OS for active connections
+// Collector polls the OS for active connections. The seen map is reserved
+// for future per-cycle deduplication; current dedup happens at insert time
+// via the (agent, proto, remote_ip, remote_port) UNIQUE constraint.
 type Collector struct {
 	seen   map[string]bool
 	logger *slog.Logger
 }
 
+// NewCollector returns a Collector using the default slog logger.
 func NewCollector() *Collector {
 	return &Collector{
 		seen:   make(map[string]bool),
@@ -38,6 +41,7 @@ func NewCollector() *Collector {
 	}
 }
 
+// NewCollectorWithLogger returns a Collector using the provided logger.
 func NewCollectorWithLogger(logger *slog.Logger) *Collector {
 	return &Collector{
 		seen:   make(map[string]bool),
@@ -45,7 +49,8 @@ func NewCollectorWithLogger(logger *slog.Logger) *Collector {
 	}
 }
 
-// Run polls connections and stores them directly in the DB (server mode)
+// Run polls connections every 10s and writes them directly to the database
+// (server / local mode). Blocks until ctx is cancelled.
 func (c *Collector) Run(ctx context.Context, db *sql.DB, agentName string) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -62,7 +67,8 @@ func (c *Collector) Run(ctx context.Context, db *sql.DB, agentName string) {
 	}
 }
 
-// RunAndSend polls connections and sends them to the server (agent mode)
+// RunAndSend polls connections every 30s and ships them to the server over
+// the agent connection (agent mode). Blocks until ctx is cancelled.
 func (c *Collector) RunAndSend(ctx context.Context, conn platform.AgentConn) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -82,6 +88,10 @@ func (c *Collector) RunAndSend(ctx context.Context, conn platform.AgentConn) {
 	}
 }
 
+// collectAndStore performs one collection cycle and upserts the rows. The
+// ON CONFLICT clause coalesces repeat sightings into a single row, bumping
+// count and last_seen, and preserves any non-null hostname/pid/process that
+// has been previously enriched.
 func (c *Collector) collectAndStore(db *sql.DB, agentName string) {
 	flows := c.collect()
 	now := time.Now().Unix()
@@ -106,7 +116,8 @@ func (c *Collector) collectAndStore(db *sql.DB, agentName string) {
 	}
 }
 
-// collect delegates to the platform-specific collectPlatform() implementation
+// collect delegates to the platform-specific collectPlatform implementation
+// and applies common filtering / rDNS enrichment.
 func (c *Collector) collect() []Flow {
 	raw := c.collectPlatform()
 	c.logger.Debug("Platform collector returned", "raw_count", len(raw))
@@ -115,7 +126,8 @@ func (c *Collector) collect() []Flow {
 	return filtered
 }
 
-// CollectFiltered is the public API for agent mode — collects and filters flows
+// CollectFiltered is the public agent-mode entry point. Returns the same
+// filtered flow list as collect() and logs a count at INFO level.
 func (c *Collector) CollectFiltered() []Flow {
 	flows := c.collect()
 	if len(flows) == 0 {
@@ -126,7 +138,8 @@ func (c *Collector) CollectFiltered() []Flow {
 	return flows
 }
 
-// filterAndEnrich removes loopback/unconnected flows and adds reverse DNS
+// filterAndEnrich drops loopback / wildcard / unconnected entries and adds
+// reverse-DNS hostnames and a SeenAt timestamp.
 func filterAndEnrich(flows []Flow) []Flow {
 	var result []Flow
 	for _, f := range flows {
@@ -149,7 +162,8 @@ func filterAndEnrich(flows []Flow) []Flow {
 	return result
 }
 
-// reverseResolve attempts reverse DNS lookup
+// reverseResolve performs a best-effort reverse DNS lookup, returning "" if
+// resolution fails.
 func reverseResolve(ip string) string {
 	names, err := net.LookupAddr(ip)
 	if err != nil || len(names) == 0 {
@@ -158,7 +172,8 @@ func reverseResolve(ip string) string {
 	return strings.TrimSuffix(names[0], ".")
 }
 
-// parseState converts hex state codes to human-readable names
+// parseState maps Linux /proc/net TCP state hex codes to their human-readable
+// names (ESTABLISHED, LISTEN, …); returns the input unchanged on miss.
 func parseState(hexState string) string {
 	states := map[string]string{
 		"01": "ESTABLISHED",

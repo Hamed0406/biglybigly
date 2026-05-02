@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+// collectCPU reads /proc/stat and returns the CPU busy percentage relative
+// to prev. The first call (prev == nil) returns 0 along with the new sample.
 func collectCPU(prev *cpuSample) (float64, *cpuSample) {
 	f, err := os.Open("/proc/stat")
 	if err != nil {
@@ -58,6 +60,8 @@ func collectCPU(prev *cpuSample) (float64, *cpuSample) {
 	return cpuPercent, cur
 }
 
+// collectMemory parses /proc/meminfo. "used" is derived as MemTotal -
+// MemAvailable, which matches what `free` reports.
 func collectMemory() (total, used, available uint64, err error) {
 	f, err := os.Open("/proc/meminfo")
 	if err != nil {
@@ -91,6 +95,7 @@ func collectMemory() (total, used, available uint64, err error) {
 	return total, used, available, nil
 }
 
+// collectLoadAvg reads the 1/5/15 minute load averages from /proc/loadavg.
 func collectLoadAvg() (l1, l5, l15 float64) {
 	data, err := os.ReadFile("/proc/loadavg")
 	if err != nil {
@@ -105,6 +110,8 @@ func collectLoadAvg() (l1, l5, l15 float64) {
 	return
 }
 
+// collectOSInfo returns PRETTY_NAME from /etc/os-release, falling back to
+// "Linux".
 func collectOSInfo() string {
 	data, err := os.ReadFile("/etc/os-release")
 	if err != nil {
@@ -120,6 +127,7 @@ func collectOSInfo() string {
 	return "Linux"
 }
 
+// collectHostname returns os.Hostname(), or "unknown" on error.
 func collectHostname() string {
 	name, err := os.Hostname()
 	if err != nil {
@@ -128,6 +136,7 @@ func collectHostname() string {
 	return name
 }
 
+// collectUptime reads the first field of /proc/uptime (seconds since boot).
 func collectUptime() int64 {
 	data, err := os.ReadFile("/proc/uptime")
 	if err != nil {
@@ -144,6 +153,8 @@ func collectUptime() int64 {
 	return int64(secs)
 }
 
+// collectDisks runs df with byte-sized output, excluding pseudo filesystems.
+// Falls back to plain df parsing when the GNU-specific flags are unsupported.
 func collectDisks() ([]DiskInfo, error) {
 	out, err := exec.Command("df", "-B1", "--output=target,fstype,size,used,avail", "--exclude-type=tmpfs", "--exclude-type=devtmpfs", "--exclude-type=squashfs", "--exclude-type=overlay").Output()
 	if err != nil {

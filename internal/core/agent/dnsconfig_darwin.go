@@ -6,21 +6,26 @@ import (
 	"strings"
 )
 
+// getActiveDNS finds the first network service with an assigned IPv4
+// address (using `networksetup -listallnetworkservices` and
+// `-getinfo`) and reads its currently configured DNS servers via
+// `networksetup -getdnsservers`. A service with DHCP-managed DNS
+// reports "aren't any" and is returned as an empty list.
 func (d *DNSConfigurator) getActiveDNS() (iface string, dns []string, err error) {
-	// Get the primary network service
 	out, err := exec.Command("networksetup", "-listallnetworkservices").Output()
 	if err != nil {
 		return "", nil, fmt.Errorf("list services: %w", err)
 	}
 
-	// Find first active service (skip the header line)
+	// Walk services in priority order; the header line and any
+	// service prefixed with "*" (disabled) are skipped.
 	var service string
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "*") || strings.Contains(line, "asterisk") {
 			continue
 		}
-		// Check if this service has an IP (is active)
+		// Treat presence of "IP address:" as a proxy for "active".
 		ipOut, err := exec.Command("networksetup", "-getinfo", line).Output()
 		if err != nil {
 			continue
@@ -35,7 +40,6 @@ func (d *DNSConfigurator) getActiveDNS() (iface string, dns []string, err error)
 		return "", nil, fmt.Errorf("no active network service found")
 	}
 
-	// Get current DNS
 	out, err = exec.Command("networksetup", "-getdnsservers", service).Output()
 	if err != nil {
 		return service, nil, nil
@@ -43,7 +47,8 @@ func (d *DNSConfigurator) getActiveDNS() (iface string, dns []string, err error)
 
 	dnsStr := strings.TrimSpace(string(out))
 	if strings.Contains(dnsStr, "aren't any") {
-		return service, nil, nil // Using DHCP DNS
+		// "There aren't any DNS Servers set on <service>." — DHCP DNS.
+		return service, nil, nil
 	}
 
 	var servers []string
@@ -57,6 +62,8 @@ func (d *DNSConfigurator) getActiveDNS() (iface string, dns []string, err error)
 	return service, servers, nil
 }
 
+// setDNS applies a static list of resolvers to the given network
+// service via `networksetup -setdnsservers`.
 func (d *DNSConfigurator) setDNS(iface string, servers []string) error {
 	args := append([]string{"-setdnsservers", iface}, servers...)
 	out, err := exec.Command("networksetup", args...).CombinedOutput()
@@ -66,6 +73,8 @@ func (d *DNSConfigurator) setDNS(iface string, servers []string) error {
 	return nil
 }
 
+// resetDNS clears any static DNS servers from the service so it falls
+// back to DHCP-supplied resolvers ("Empty" is networksetup's sentinel).
 func (d *DNSConfigurator) resetDNS(iface string) error {
 	out, err := exec.Command("networksetup", "-setdnsservers", iface, "Empty").CombinedOutput()
 	if err != nil {

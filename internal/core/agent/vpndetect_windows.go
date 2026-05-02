@@ -5,10 +5,22 @@ import (
 	"strings"
 )
 
+// detectVPNs probes the Windows host for active VPN/proxy software.
+// It runs two PowerShell pipelines:
+//
+//  1. Get-NetAdapter is filtered for adapters whose description or name
+//     matches well-known VPN/proxy keywords (TAP/TUN, WireGuard,
+//     OpenVPN, Cisco AnyConnect, Fortinet, Pulse, GlobalProtect,
+//     ProtonVPN.Client, Cloudflare WARP, etc.). For each match the
+//     IPv4 DNS servers configured on the adapter are also captured.
+//  2. Get-Process is filtered for a curated list of VPN client process
+//     names; matches not already covered by an adapter hit are added
+//     so background VPN services without a visible adapter are still
+//     reported.
 func detectVPNs() []VPNInfo {
 	var vpns []VPNInfo
 
-	// Method 1: Check network adapters for VPN-like interfaces
+	// Method 1: VPN-flavoured network adapters that are currently up.
 	out, err := exec.Command("powershell", "-NoProfile", "-Command", `
 		Get-NetAdapter | Where-Object {
 			$_.Status -eq 'Up' -and (
@@ -43,7 +55,8 @@ func detectVPNs() []VPNInfo {
 		}
 	}
 
-	// Method 2: Check for common VPN processes
+	// Method 2: running VPN client processes (catches services with no
+	// visible adapter, e.g. background helpers).
 	processOut, err := exec.Command("powershell", "-NoProfile", "-Command", `
 		$vpnProcesses = @(
 			'openvpn', 'wireguard', 'vpnui', 'vpncli',
@@ -64,7 +77,8 @@ func detectVPNs() []VPNInfo {
 			if proc == "" {
 				continue
 			}
-			// Don't duplicate if already found via adapter
+			// Skip processes whose name was already surfaced as an
+			// adapter match so we don't double-report the same VPN.
 			found := false
 			for _, v := range vpns {
 				if strings.EqualFold(v.Name, proc) || strings.Contains(strings.ToLower(v.Name), strings.ToLower(proc)) {

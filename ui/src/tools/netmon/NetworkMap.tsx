@@ -1,7 +1,15 @@
+/**
+ * Force-directed network topology visualisation built on D3.
+ *
+ * Renders agents and remote hosts as nodes and observed traffic as directed
+ * edges. Edges between the same pair are merged so the line width can encode
+ * total flow count, and the SVG supports pan / zoom plus a hover tooltip.
+ */
 import { useRef, useEffect, useCallback } from 'react';
 import * as d3 from 'd3';
 import { GraphData, GraphNode, GraphEdge } from './api';
 
+/** D3 simulation node — extends the platform `GraphNode` with D3 layout fields. */
 interface SimNode extends d3.SimulationNodeDatum {
   id: string;
   label: string;
@@ -9,6 +17,7 @@ interface SimNode extends d3.SimulationNodeDatum {
   size: number;
 }
 
+/** D3 simulation link — carries traffic metadata used for tooltips and width. */
 interface SimLink extends d3.SimulationLinkDatum<SimNode> {
   port: number;
   proto: string;
@@ -16,11 +25,15 @@ interface SimLink extends d3.SimulationLinkDatum<SimNode> {
 }
 
 interface NetworkMapProps {
+  /** Nodes + edges to render. */
   data: GraphData;
+  /** SVG canvas width in pixels. */
   width?: number;
+  /** SVG canvas height in pixels. */
   height?: number;
 }
 
+/** Force-directed graph of agents → remote hosts. */
 export default function NetworkMap({ data, width = 900, height = 500 }: NetworkMapProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);

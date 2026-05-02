@@ -1,3 +1,12 @@
+// Package dnsfilter implements a network-wide DNS filtering module.
+//
+// On agents it runs a DNS proxy (UDP+TCP, default 127.0.0.1:53) using
+// github.com/miekg/dns. Queries are matched against in-memory blocked/allowed
+// maps populated from hosts-file blocklists and user-defined custom rules.
+// Blocked queries are answered with 0.0.0.0 / ::; everything else is forwarded
+// to upstream resolvers. Per-query logs are batched and shipped to the server
+// via /api/dnsfilter/ingest, where they back the dashboard, query log, and
+// blocklist/rule management UI.
 package dnsfilter
 
 import (
@@ -8,23 +17,35 @@ import (
 	"github.com/hamed0406/biglybigly/internal/platform"
 )
 
+// Module is the dnsfilter platform.Module implementation. It holds references
+// to the blocklist manager and DNS proxy used in agent mode.
 type Module struct {
 	p         platform.Platform
 	blocklist *BlocklistManager
 	proxy     *Proxy
 }
 
+// New constructs an uninitialized dnsfilter module. Use Init/Start to wire it
+// into the platform.
 func New() *Module {
 	return &Module{}
 }
 
+// ID returns the stable module identifier used as the route and table prefix.
 func (m *Module) ID() string      { return "dnsfilter" }
+
+// Name returns the human-readable module name shown in the UI.
 func (m *Module) Name() string    { return "DNS Filter" }
+
+// Version returns the module's semantic version.
 func (m *Module) Version() string { return "0.1.0" }
+
+// Icon returns the inline SVG icon rendered in the sidebar.
 func (m *Module) Icon() string {
 	return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/><path d="M2 12h20"/><path d="M12 2c2.5 2.8 4 6.2 4 10s-1.5 7.2-4 10"/><path d="M12 2c-2.5 2.8-4 6.2-4 10s1.5 7.2 4 10"/><line x1="4" y1="4" x2="20" y2="20" stroke-width="3"/></svg>`
 }
 
+// Migrate creates the dnsfilter_* tables and indexes. Idempotent.
 func (m *Module) Migrate(db *sql.DB) error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS dnsfilter_queries (
@@ -73,6 +94,9 @@ func (m *Module) Migrate(db *sql.DB) error {
 	return err
 }
 
+// Init wires up HTTP routes for stats, query log, blocklist/rule management,
+// and the agent ingest endpoint. The ingest endpoint is intentionally
+// unauthenticated so remote agents can submit query logs.
 func (m *Module) Init(p platform.Platform) error {
 	m.p = p
 	mux := p.Mux()
@@ -102,6 +126,9 @@ func (m *Module) Init(p platform.Platform) error {
 	return nil
 }
 
+// Start runs server-mode background work: it seeds a default blocklist on
+// first run and launches the periodic query-log cleanup. Blocks until ctx is
+// cancelled.
 func (m *Module) Start(ctx context.Context) error {
 	// Server mode: seed default blocklists if none exist, run cleanup
 	db := m.p.DB()
@@ -128,15 +155,20 @@ func (m *Module) Start(ctx context.Context) error {
 	return nil
 }
 
+// AgentCapable reports that dnsfilter has agent-side logic (the DNS proxy).
 func (m *Module) AgentCapable() bool {
 	return true
 }
 
+// AgentStart is the agent-side entry point. The actual DNS proxy is started
+// elsewhere by the agent runtime; here we simply block until shutdown.
 func (m *Module) AgentStart(ctx context.Context, conn platform.AgentConn) error {
 	<-ctx.Done()
 	return nil
 }
 
+// currentTimestamp returns the current Unix time using the package-level
+// timeNow hook so tests can override it.
 func currentTimestamp() int64 {
 	return timeNow().Unix()
 }

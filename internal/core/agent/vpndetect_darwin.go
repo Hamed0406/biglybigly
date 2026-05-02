@@ -5,10 +5,19 @@ import (
 	"strings"
 )
 
+// detectVPNs probes the macOS host for active VPN/proxy software using
+// three complementary signals:
+//
+//  1. utun/tun/tap interfaces returned by `ifconfig -l` (utun is the
+//     standard kernel TUN device used by all modern macOS VPN clients).
+//  2. Connected entries from `scutil --nc list` (system VPN services).
+//  3. Running processes from a curated list of VPN client names.
+//
+// Hits from later methods are deduplicated against earlier ones.
 func detectVPNs() []VPNInfo {
 	var vpns []VPNInfo
 
-	// Method 1: Check for utun interfaces (macOS VPN standard)
+	// Method 1: utun-style interfaces.
 	out, err := exec.Command("ifconfig", "-l").Output()
 	if err == nil {
 		for _, iface := range strings.Fields(string(out)) {
@@ -23,13 +32,14 @@ func detectVPNs() []VPNInfo {
 		}
 	}
 
-	// Method 2: Check network services for VPN
+	// Method 2: connected network services per scutil.
 	out, err = exec.Command("scutil", "--nc", "list").Output()
 	if err == nil {
 		for _, line := range strings.Split(string(out), "\n") {
 			line = strings.TrimSpace(line)
 			if strings.Contains(line, "Connected") {
-				// Extract VPN name from between quotes
+				// scutil prints the service name in quotes; extract
+				// whatever lies between the first and last quote.
 				start := strings.Index(line, `"`)
 				end := strings.LastIndex(line, `"`)
 				if start >= 0 && end > start {
@@ -43,7 +53,7 @@ func detectVPNs() []VPNInfo {
 		}
 	}
 
-	// Method 3: Check for VPN processes
+	// Method 3: running VPN processes.
 	vpnProcesses := []string{
 		"openvpn", "wireguard-go",
 		"NordVPN", "ExpressVPN", "Surfshark",

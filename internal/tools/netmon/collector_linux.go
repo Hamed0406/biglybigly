@@ -11,7 +11,8 @@ import (
 	"strings"
 )
 
-// collectPlatform reads /proc/net/tcp, tcp6, udp, udp6
+// collectPlatform reads connection tables from /proc/net/{tcp,tcp6,udp,udp6}
+// and enriches each flow with the owning process name when discoverable.
 func (c *Collector) collectPlatform() []Flow {
 	var flows []Flow
 	for _, entry := range []struct {
@@ -36,7 +37,8 @@ func (c *Collector) collectPlatform() []Flow {
 	return flows
 }
 
-// parseProcNet reads a /proc/net/{tcp,udp} file
+// parseProcNet parses one /proc/net/{tcp,udp}* file. The format is fixed:
+// columns are local addr, remote addr, state, ..., inode (column 10).
 func parseProcNet(path, proto string) []Flow {
 	f, err := os.Open(path)
 	if err != nil {
@@ -78,7 +80,9 @@ func parseProcNet(path, proto string) []Flow {
 	return flows
 }
 
-// ParseHexAddr converts "0100007F:0035" to ("127.0.0.1", 53)
+// ParseHexAddr converts a /proc/net hex address like "0100007F:0035" into
+// ("127.0.0.1", 53). Both IPv4 (8 hex chars) and IPv6 (32 hex chars, stored
+// as four little-endian 4-byte groups) are supported.
 func ParseHexAddr(s string) (string, int) {
 	parts := strings.Split(s, ":")
 	if len(parts) != 2 {
@@ -111,7 +115,9 @@ func ParseHexAddr(s string) (string, int) {
 	return "", int(port)
 }
 
-// findPIDByInode walks /proc/*/fd/ to find which PID owns a socket inode
+// findPIDByInode walks /proc/*/fd looking for a symlink that resolves to
+// "socket:[<inode>]" and returns the owning PID. Returns 0 when not found
+// (e.g. running unprivileged against another user's sockets).
 func findPIDByInode(inode string) int {
 	if inode == "0" {
 		return 0
@@ -151,7 +157,7 @@ func findPIDByInode(inode string) int {
 	return 0
 }
 
-// getProcessName reads /proc/<pid>/comm
+// getProcessName reads /proc/<pid>/comm and returns the trimmed command name.
 func getProcessName(pid int) string {
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
 	if err != nil {

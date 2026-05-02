@@ -13,7 +13,12 @@ import (
 	"time"
 )
 
-// BlocklistManager downloads, parses, and caches blocklist domains in memory
+// BlocklistManager downloads, parses, and caches blocklist domains in memory.
+//
+// The maps are rebuilt by LoadFromDB, which is the sole source of truth: it
+// merges all enabled hosts-file blocklists with custom rules from the
+// dnsfilter_custom_rules table and atomically swaps the in-memory state.
+// Lookups go through IsBlocked, which performs parent-domain matching.
 type BlocklistManager struct {
 	mu       sync.RWMutex
 	blocked  map[string]bool // domain → blocked
@@ -23,11 +28,14 @@ type BlocklistManager struct {
 	client   *http.Client
 }
 
-// RuleFetcher is implemented by the agent client to fetch rules from the server
+// RuleFetcher is implemented by the agent client to fetch JSON resources
+// (rules, blocklists) from the server during sync.
 type RuleFetcher interface {
 	FetchJSON(ctx context.Context, path string, dest interface{}) error
 }
 
+// NewBlocklistManager constructs a BlocklistManager with empty maps and a
+// 60-second HTTP client for blocklist downloads.
 func NewBlocklistManager(logger *slog.Logger) *BlocklistManager {
 	return &BlocklistManager{
 		blocked: make(map[string]bool),
@@ -37,7 +45,10 @@ func NewBlocklistManager(logger *slog.Logger) *BlocklistManager {
 	}
 }
 
-// IsBlocked checks if a domain should be blocked
+// IsBlocked reports whether a domain should be blocked. Explicit allow rules
+// always win. A block on a parent domain (e.g. "bbc.com") also blocks all
+// subdomains ("www.bbc.com", "ads.bbc.com"), unless an intermediate label is
+// explicitly allowed.
 func (bm *BlocklistManager) IsBlocked(domain string) bool {
 	domain = normalizeDomain(domain)
 
@@ -69,14 +80,18 @@ func (bm *BlocklistManager) IsBlocked(domain string) bool {
 	return false
 }
 
-// TotalBlocked returns count of domains in blocklist
+// TotalBlocked returns the number of domains currently in the in-memory
+// blocklist (excludes allow rules).
 func (bm *BlocklistManager) TotalBlocked() int {
 	bm.mu.RLock()
 	defer bm.mu.RUnlock()
 	return bm.total
 }
 
-// LoadFromDB loads all enabled blocklists and custom rules from the database
+// LoadFromDB rebuilds the in-memory blocked/allowed maps from the database.
+// It downloads every enabled blocklist URL, layers custom rules on top, and
+// atomically swaps the result. This is the sole writer of the in-memory
+// state; call it after any rule or blocklist change.
 func (bm *BlocklistManager) LoadFromDB(db *sql.DB) error {
 	blocked := make(map[string]bool)
 	allowed := make(map[string]bool)
@@ -153,7 +168,8 @@ func (bm *BlocklistManager) LoadFromDB(db *sql.DB) error {
 	return nil
 }
 
-// downloadList fetches a hosts-file format blocklist and returns domain list
+// downloadList fetches a hosts-file-format blocklist over HTTP and returns
+// the parsed domain list.
 func (bm *BlocklistManager) downloadList(url string) ([]string, error) {
 	resp, err := bm.client.Get(url)
 	if err != nil {
@@ -168,7 +184,9 @@ func (bm *BlocklistManager) downloadList(url string) ([]string, error) {
 	return parseHostsFile(resp.Body)
 }
 
-// parseHostsFile parses a hosts-file or domain-list format
+// parseHostsFile parses either hosts-file syntax ("0.0.0.0 domain.com") or a
+// plain one-domain-per-line list, skipping comments, localhost entries, and
+// malformed lines.
 func parseHostsFile(r io.Reader) ([]string, error) {
 	var domains []string
 	scanner := bufio.NewScanner(r)
@@ -214,7 +232,8 @@ func parseHostsFile(r io.Reader) ([]string, error) {
 	return domains, scanner.Err()
 }
 
-// normalizeDomain lowercases and trims trailing dots
+// normalizeDomain lowercases the input, trims surrounding whitespace, and
+// strips any trailing FQDN dot.
 func normalizeDomain(d string) string {
 	d = strings.ToLower(strings.TrimSpace(d))
 	d = strings.TrimSuffix(d, ".")
@@ -250,9 +269,12 @@ func extractDomainFromInput(input string) string {
 	return normalizeDomain(input)
 }
 
-// SyncRulesFromServer fetches custom rules and blocklists from the server
-// and replaces the agent's local DB rules to stay in sync (handles deletions).
-// Call LoadFromDB after this to rebuild the in-memory blocklist.
+// SyncRulesFromServer pulls the canonical custom rules and blocklists from
+// the server and reconciles them into the agent's local DB. Custom rules are
+// fully replaced (DELETE + re-INSERT) so server-side deletions propagate;
+// blocklists are upserted so locally-added entries are preserved.
+//
+// LoadFromDB must be called after this to rebuild the in-memory state.
 func (bm *BlocklistManager) SyncRulesFromServer(fetcher RuleFetcher, db *sql.DB, logger *slog.Logger) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

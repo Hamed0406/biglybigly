@@ -1,3 +1,16 @@
+// Package agent implements the agent-side runtime of biglybigly.
+//
+// It provides:
+//   - An HTTP Client used to push collected data (network flows, system
+//     snapshots, DNS query logs) to the central server and to fetch
+//     configuration such as filter rules.
+//   - Platform-specific preflight checks (privileges, required tooling such
+//     as PowerShell or lsof, packet-capture drivers) that run at startup.
+//   - A cross-platform DNSConfigurator that points the host's resolver at
+//     the local DNS filter (127.0.0.1) and restores the previous settings
+//     on shutdown.
+//   - VPN/proxy detection used to warn the operator when a tunnel is
+//     likely to bypass the local DNS filter.
 package agent
 
 import (
@@ -12,16 +25,20 @@ import (
 	"time"
 )
 
-// ConnStatus represents the current connection state
+// ConnStatus represents the current connection state of the agent's link
+// to the central server.
 type ConnStatus string
 
+// Connection states reported via Client.Status.
 const (
 	StatusConnected    ConnStatus = "connected"
 	StatusDisconnected ConnStatus = "disconnected"
 	StatusConnecting   ConnStatus = "connecting"
 )
 
-// Client runs as an agent, collecting data and sending it to a remote server
+// Client is the agent-side HTTP client that pushes collected data to the
+// central biglybigly server and fetches configuration from it. It is safe
+// for concurrent use; status and counters are guarded by an internal mutex.
 type Client struct {
 	serverURL  string
 	agentName  string
@@ -38,6 +55,9 @@ type Client struct {
 	flowsSent     int64
 }
 
+// NewClient returns a Client configured to talk to serverURL, identifying
+// itself as agentName and authenticating with agentToken (sent as an
+// HTTP Bearer token when non-empty).
 func NewClient(serverURL, agentName, agentToken string, logger *slog.Logger) *Client {
 	return &Client{
 		serverURL:  strings.TrimRight(serverURL, "/"),
@@ -49,14 +69,18 @@ func NewClient(serverURL, agentName, agentToken string, logger *slog.Logger) *Cl
 	}
 }
 
-// Status returns current connection status
+// Status returns the current connection status as last observed by an
+// outbound request.
 func (c *Client) Status() ConnStatus {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.status
 }
 
-// Stats returns agent statistics
+// Stats returns cumulative counters since the Client was created:
+// total successful posts, total errors, total flows accepted by the
+// server, the time of the last successful send, and the last error
+// message (empty if the most recent send succeeded).
 func (c *Client) Stats() (totalSent, totalErrors, flowsSent int64, lastSend time.Time, lastErr string) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -69,13 +93,16 @@ func (c *Client) setStatus(s ConnStatus) {
 	c.mu.Unlock()
 }
 
-// IngestPayload is sent to the server's /api/netmon/ingest endpoint
+// IngestPayload is the JSON envelope sent to /api/netmon/ingest.
+// Flows is left as interface{} so each collector can supply its own
+// concrete slice type without an import cycle.
 type IngestPayload struct {
 	Agent string      `json:"agent"`
 	Flows interface{} `json:"flows"`
 }
 
-// SendFlows posts collected flows to the server
+// SendFlows posts a batch of collected network flows to the server's
+// netmon ingest endpoint and updates connection status / counters.
 func (c *Client) SendFlows(ctx context.Context, flows interface{}) error {
 	c.setStatus(StatusConnecting)
 
@@ -112,7 +139,8 @@ func (c *Client) SendFlows(ctx context.Context, flows interface{}) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		// Read response body for error details
+		// Capture a bounded slice of the response body so the error
+		// surfaced to the caller and logs is useful but not unbounded.
 		var errBody []byte
 		errBody = make([]byte, 512)
 		n, _ := resp.Body.Read(errBody)
@@ -148,7 +176,9 @@ func (c *Client) SendFlows(ctx context.Context, flows interface{}) error {
 	return nil
 }
 
-// sendJSON posts JSON data to a server endpoint and returns the response
+// sendJSON marshals payload as JSON, POSTs it to path on the configured
+// server (with the agent's bearer token if set) and updates connection
+// status / counters based on the outcome.
 func (c *Client) sendJSON(ctx context.Context, path string, payload interface{}) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -197,7 +227,7 @@ func (c *Client) sendJSON(ctx context.Context, path string, payload interface{})
 	return nil
 }
 
-// SendSysmon posts system monitoring data to the server
+// SendSysmon posts a system-monitoring snapshot to /api/sysmon/ingest.
 func (c *Client) SendSysmon(ctx context.Context, snapshot interface{}) error {
 	payload := map[string]interface{}{
 		"agent":    c.agentName,
@@ -206,7 +236,8 @@ func (c *Client) SendSysmon(ctx context.Context, snapshot interface{}) error {
 	return c.sendJSON(ctx, "/api/sysmon/ingest", payload)
 }
 
-// SendDNSLogs posts DNS query logs to the server
+// SendDNSLogs posts a batch of DNS query log entries to
+// /api/dnsfilter/ingest.
 func (c *Client) SendDNSLogs(ctx context.Context, queries interface{}) error {
 	payload := map[string]interface{}{
 		"agent":   c.agentName,
@@ -215,7 +246,10 @@ func (c *Client) SendDNSLogs(ctx context.Context, queries interface{}) error {
 	return c.sendJSON(ctx, "/api/dnsfilter/ingest", payload)
 }
 
-// FetchJSON does a GET request to a server endpoint and decodes JSON into dest
+// FetchJSON performs an authenticated GET against path on the server
+// and decodes the JSON response into dest. It is used for pulling
+// configuration such as DNS filter rules from the server (see
+// SyncRulesFromServer in the dnsfilter module).
 func (c *Client) FetchJSON(ctx context.Context, path string, dest interface{}) error {
 	url := fmt.Sprintf("%s%s", c.serverURL, path)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -239,9 +273,13 @@ func (c *Client) FetchJSON(ctx context.Context, path string, dest interface{}) e
 	return json.NewDecoder(resp.Body).Decode(dest)
 }
 
-// Ping checks connectivity to the server by testing the ingest endpoint
+// Ping verifies that the configured server is reachable and that the
+// netmon ingest endpoint is mounted. It performs two probes — a GET on
+// /api/modules for basic reachability and an empty POST on
+// /api/netmon/ingest — so that misconfigurations where the server is up
+// but modules failed to register are surfaced clearly to the operator.
 func (c *Client) Ping(ctx context.Context) error {
-	// First check basic server reachability
+	// First check basic server reachability.
 	url := fmt.Sprintf("%s/api/modules", c.serverURL)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -259,7 +297,8 @@ func (c *Client) Ping(ctx context.Context) error {
 	}
 	c.logger.Info("Server reachable", "url", c.serverURL)
 
-	// Now test the ingest endpoint is actually registered
+	// Now test the ingest endpoint is actually registered. A 404 here
+	// usually means the netmon module didn't initialize on the server.
 	ingestURL := fmt.Sprintf("%s/api/netmon/ingest", c.serverURL)
 	testPayload := []byte(`{"agent":"ping-test","flows":[]}`)
 	req2, err := http.NewRequestWithContext(ctx, "POST", ingestURL, bytes.NewReader(testPayload))

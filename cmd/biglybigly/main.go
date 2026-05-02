@@ -1,3 +1,16 @@
+// Command biglybigly is the single-binary entry point for the platform. It
+// runs in one of two modes selected via -mode or the BIGLYBIGLY_MODE env var:
+//
+//   - server: serves the web UI, owns the database, and accepts WebSocket
+//     connections from remote agents. This is the default.
+//   - agent:  no UI; collects local data (network flows, system metrics, DNS
+//     queries) and ships it to a server over the agent protocol. Also runs a
+//     local DNS filtering proxy on 127.0.0.1:53.
+//
+// Modules are registered explicitly here — adding a new tool is a one-line
+// change to the modules slice below. Logs are written to both stderr and a
+// file via io.MultiWriter so operators can tail the file in production while
+// developers still see output on the terminal.
 package main
 
 import (
@@ -24,7 +37,7 @@ import (
 	"github.com/hamed0406/biglybigly/internal/tools/urlcheck"
 )
 
-// Set via ldflags at build time
+// Build metadata, populated via -ldflags "-X main.version=... -X main.commit=...".
 var (
 	version = "dev"
 	commit  = "unknown"
@@ -197,7 +210,20 @@ func main() {
 	}
 }
 
-// runAgent runs the agent mode — collects network data and sends to server
+// runAgent is the agent-mode entry point. It runs preflight checks, opens a
+// connection to the configured server, then launches a fan of background
+// goroutines: a DNS filtering proxy, periodic blocklist/rule sync, and
+// shippers for network flows, system metrics, and DNS query logs.
+//
+// Two ordering details matter here:
+//   - VPN/proxy detection runs at startup so operators are warned early when
+//     a VPN is intercepting DNS and would defeat local filtering.
+//   - The DNS proxy is started BEFORE blocklists are downloaded. If a previous
+//     run already pointed system DNS at 127.0.0.1, the blocklist HTTP fetch
+//     itself depends on the proxy being live to resolve its own URL.
+//
+// Server-pushed rule changes are reconciled every 5 minutes; full blocklist
+// re-downloads happen every 6 hours.
 func runAgent(ctx context.Context, cancel context.CancelFunc, cfg *config.Config, db *sql.DB, logger *slog.Logger) {
 	// Run preflight checks
 	if !agent.RunPreflight(logger) {

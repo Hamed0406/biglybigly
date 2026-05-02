@@ -1,3 +1,10 @@
+// Package api wires up the platform's HTTP surface: the first-run setup
+// endpoints, the module catalog used by the UI sidebar, the aggregated
+// dashboard endpoint (which reads from several module tables), and the
+// embedded SPA static asset handler.
+//
+// Module-specific routes are registered by each module on the shared mux
+// during its Init; this package only owns platform-level routes.
 package api
 
 import (
@@ -21,18 +28,34 @@ var staticFS embed.FS
 
 func currentUnix() int64 { return time.Now().Unix() }
 
+// Server holds the platform handle and module registry needed by the API
+// handlers. It is unused by NewServer today but kept for future composition.
 type Server struct {
 	platform *platform.PlatformImpl
 	registry *platform.Registry
 }
 
-// GenerateBootstrapToken creates a random token printed to console for first-run security
+// GenerateBootstrapToken returns a fresh 128-bit hex token. It is printed to
+// the console on first run and required by /api/setup/complete until setup is
+// finished — preventing a bystander on the same network from claiming the
+// instance before the operator does.
 func GenerateBootstrapToken() string {
 	b := make([]byte, 16)
 	rand.Read(b)
 	return hex.EncodeToString(b)
 }
 
+// NewServer wires every platform HTTP route onto plat.Mux() and returns a
+// handler that logs incoming /api/ requests. Routes registered here:
+//
+//   - GET  /api/setup/status     — first-run wizard status
+//   - POST /api/setup/complete   — finish setup (requires bootstrap token)
+//   - GET  /api/modules          — module catalog for the UI sidebar
+//   - GET  /api/dashboard        — aggregated stats across modules
+//   - GET  /assets/*             — embedded SPA assets
+//   - GET  /                     — SPA index (fallback for client-side routing)
+//
+// Module-specific routes (already registered via Init) are not touched here.
 func NewServer(plat platform.Platform, registry *platform.Registry, bootstrapToken string) http.Handler {
 	mux := plat.Mux()
 	db := plat.DB()
@@ -159,6 +182,10 @@ func NewServer(plat platform.Platform, registry *platform.Registry, bootstrapTok
 	})
 
 	// --- Dashboard API ---
+	// Aggregates a snapshot of system-wide health by reading from several
+	// module tables in one round trip (sysmon_snapshots, dnsfilter_queries,
+	// dnsfilter_blocklists, netmon_flows, urlcheck_urls). This is the only
+	// platform endpoint that legitimately reaches across module namespaces.
 	mux.HandleFunc("GET /api/dashboard", func(w http.ResponseWriter, r *http.Request) {
 		type AgentSummary struct {
 			Name       string  `json:"name"`

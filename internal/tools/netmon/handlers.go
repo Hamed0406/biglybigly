@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+// FlowRow is a row from the netmon_flows table as returned by the flow list
+// API.
 type FlowRow struct {
 	ID         int    `json:"id"`
 	AgentName  string `json:"agent_name"`
@@ -24,11 +26,13 @@ type FlowRow struct {
 	LastSeen   int64  `json:"last_seen"`
 }
 
+// TopEntry is a name/count pair used by the top-N hosts and ports endpoints.
 type TopEntry struct {
 	Name  string `json:"name"`
 	Count int    `json:"count"`
 }
 
+// StatsResponse is the payload returned by GET /api/netmon/stats.
 type StatsResponse struct {
 	TotalFlows   int `json:"total_flows"`
 	TotalHosts   int `json:"total_hosts"`
@@ -36,6 +40,8 @@ type StatsResponse struct {
 	UniqueAgents int `json:"unique_agents"`
 }
 
+// handleListFlows returns flow rows (default 200, max 1000) filtered by
+// optional agent / proto / search query parameters, ordered by last_seen.
 func (m *Module) handleListFlows(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
 
@@ -101,6 +107,8 @@ func (m *Module) handleListFlows(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(flows)
 }
 
+// handleTopHosts returns the most-contacted remote hosts, ranked by the sum
+// of per-flow counts. Falls back to remote_ip when no hostname is known.
 func (m *Module) handleTopHosts(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
 	agent := r.URL.Query().Get("agent")
@@ -146,6 +154,8 @@ func (m *Module) handleTopHosts(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(entries)
 }
 
+// handleTopPorts returns the busiest remote ports, annotated with well-known
+// service names where applicable.
 func (m *Module) handleTopPorts(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
 	agent := r.URL.Query().Get("agent")
@@ -192,6 +202,8 @@ func (m *Module) handleTopPorts(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(entries)
 }
 
+// handleStats returns aggregate counters (total flows, distinct hosts,
+// currently established, distinct agents), optionally scoped to one agent.
 func (m *Module) handleStats(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
 	agent := r.URL.Query().Get("agent")
@@ -213,7 +225,8 @@ func (m *Module) handleStats(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(stats)
 }
 
-// handleAgents returns a list of known agent names with their flow counts and last seen time
+// handleAgents returns the list of known agents with flow counts and last
+// seen timestamps.
 func (m *Module) handleAgents(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
 
@@ -252,7 +265,9 @@ func (m *Module) handleAgents(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(agents)
 }
 
-// handleGraph returns nodes and edges for the network topology visualization
+// handleGraph returns nodes and edges for the network topology view: each
+// agent and remote host becomes a node; edges aggregate flows by
+// (agent, host, port, proto).
 func (m *Module) handleGraph(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
 	agent := r.URL.Query().Get("agent")
@@ -352,7 +367,10 @@ func (m *Module) handleGraph(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleIngest receives flow data from agents via HTTP (alternative to WebSocket)
+// handleIngest receives a batch of flows from a remote agent over plain HTTP
+// (the alternative to the WebSocket transport). The endpoint is
+// unauthenticated; the agent self-identifies via the payload's "agent" field.
+// Inserts use the same upsert pattern as the local collector to deduplicate.
 func (m *Module) handleIngest(w http.ResponseWriter, r *http.Request) {
 	logger := m.p.Log()
 	logger.Info("Ingest request received",
@@ -432,6 +450,7 @@ func (m *Module) handleIngest(w http.ResponseWriter, r *http.Request) {
 
 // --- Hostname History Handlers ---
 
+// HostnameRecord is a single row from netmon_hostname_history.
 type HostnameRecord struct {
 	IP        string `json:"ip"`
 	Hostname  string `json:"hostname"`
@@ -441,7 +460,8 @@ type HostnameRecord struct {
 	SeenCount int    `json:"seen_count"`
 }
 
-// handleHostnames returns all tracked hostname mappings
+// handleHostnames returns tracked IP↔hostname mappings (default 200, max
+// 1000) with optional agent / search filters.
 func (m *Module) handleHostnames(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
 	agent := r.URL.Query().Get("agent")
@@ -492,7 +512,8 @@ func (m *Module) handleHostnames(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(records)
 }
 
-// handleRecentHostnames returns recently discovered hostname mappings
+// handleRecentHostnames returns the 50 most recently first-seen hostname
+// mappings.
 func (m *Module) handleRecentHostnames(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
 	agent := r.URL.Query().Get("agent")
@@ -531,7 +552,8 @@ func (m *Module) handleRecentHostnames(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(records)
 }
 
-// handleHostnameLookup returns all hostname records for a specific IP
+// handleHostnameLookup returns every hostname record observed for a given
+// IP, across all agents.
 func (m *Module) handleHostnameLookup(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
 	ip := r.URL.Query().Get("ip")
@@ -568,7 +590,8 @@ func (m *Module) handleHostnameLookup(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(records)
 }
 
-// handleHostnameStats returns summary stats for hostname tracking
+// handleHostnameStats returns summary counters for the hostname tracker
+// (total mappings, distinct IPs / names, mappings created today).
 func (m *Module) handleHostnameStats(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
 	agent := r.URL.Query().Get("agent")

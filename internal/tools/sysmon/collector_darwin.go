@@ -9,8 +9,10 @@ import (
 	"time"
 )
 
+// collectCPU reads kern.cp_time via sysctl and computes the busy percentage
+// relative to the previous sample. macOS lays out the tick counters as
+// user/nice/sys/intr/idle, so the 5th field is the idle counter.
 func collectCPU(prev *cpuSample) (float64, *cpuSample) {
-	// Use sysctl to get CPU load (different from Linux)
 	out, err := exec.Command("sysctl", "-n", "kern.cp_time").Output()
 	if err != nil {
 		return 0, prev
@@ -48,6 +50,9 @@ func collectCPU(prev *cpuSample) (float64, *cpuSample) {
 	return cpuPercent, cur
 }
 
+// collectMemory queries hw.memsize, hw.pagesize and vm_stat. "available" is
+// approximated as (free + speculative + inactive) pages * pagesize, which
+// matches what Activity Monitor reports as available memory.
 func collectMemory() (total, used, available uint64, err error) {
 	// Total memory via sysctl
 	out, err := exec.Command("sysctl", "-n", "hw.memsize").Output()
@@ -93,6 +98,7 @@ func collectMemory() (total, used, available uint64, err error) {
 	return total, used, available, nil
 }
 
+// collectLoadAvg parses vm.loadavg ("{ 1.23 4.56 7.89 }").
 func collectLoadAvg() (l1, l5, l15 float64) {
 	out, err := exec.Command("sysctl", "-n", "vm.loadavg").Output()
 	if err != nil {
@@ -109,6 +115,7 @@ func collectLoadAvg() (l1, l5, l15 float64) {
 	return
 }
 
+// collectOSInfo returns "macOS <version>" via sw_vers.
 func collectOSInfo() string {
 	out, err := exec.Command("sw_vers", "-productVersion").Output()
 	if err != nil {
@@ -117,6 +124,7 @@ func collectOSInfo() string {
 	return "macOS " + strings.TrimSpace(string(out))
 }
 
+// collectHostname returns os.Hostname(), or "unknown" on error.
 func collectHostname() string {
 	name, err := os.Hostname()
 	if err != nil {
@@ -125,6 +133,8 @@ func collectHostname() string {
 	return name
 }
 
+// collectUptime parses kern.boottime ("{ sec = N, usec = … }") and returns
+// seconds since boot.
 func collectUptime() int64 {
 	out, err := exec.Command("sysctl", "-n", "kern.boottime").Output()
 	if err != nil {
@@ -148,6 +158,8 @@ func collectUptime() int64 {
 	return time.Now().Unix() - bootSec
 }
 
+// collectDisks parses `df -b` output. macOS df reports 512-byte blocks, so
+// values are scaled to bytes here.
 func collectDisks() ([]DiskInfo, error) {
 	out, err := exec.Command("df", "-b").Output()
 	if err != nil {

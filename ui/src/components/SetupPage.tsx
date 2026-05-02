@@ -1,9 +1,25 @@
+/**
+ * First-run setup wizard.
+ *
+ * Walks the operator through:
+ *   1. Pasting the bootstrap token (printed to the server's stdout) to
+ *      authenticate the setup request.
+ *   2. Choosing a run mode — `server` (full UI + DB) or `agent` (collector
+ *      that reports to a remote server).
+ *   3. Configuring the instance name and, for agent mode, the server URL.
+ *
+ * Successful server-mode setup signals completion via `onComplete`. Agent-mode
+ * setup shows a final step instructing the operator to restart the process so
+ * it can re-launch in agent mode.
+ */
 import { useState } from 'react'
 
 interface SetupPageProps {
+  /** Called when server-mode setup succeeds; the app then loads normally. */
   onComplete: () => void
 }
 
+/** Multi-step first-run configuration wizard. */
 export default function SetupPage({ onComplete }: SetupPageProps) {
   const [step, setStep] = useState(1)
   const [mode, setMode] = useState<'server' | 'agent'>('server')

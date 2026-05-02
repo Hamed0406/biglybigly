@@ -7,15 +7,23 @@ import (
 	"strings"
 )
 
+// detectVPNs probes the Linux host for active VPN/proxy software.
+// It combines two signals:
+//
+//  1. Interfaces under /sys/class/net whose name matches well-known
+//     VPN prefixes (tun, tap, wg, proton, nordlynx, tailscale).
+//  2. Running processes from a curated list of VPN daemons/clients.
+//
+// Process-based hits are deduplicated against interface-based hits so
+// the same VPN isn't reported twice.
 func detectVPNs() []VPNInfo {
 	var vpns []VPNInfo
 
-	// Method 1: Check for tun/tap interfaces
+	// Method 1: VPN-style interfaces in /sys/class/net.
 	entries, err := os.ReadDir("/sys/class/net")
 	if err == nil {
 		for _, e := range entries {
 			name := e.Name()
-			// Check for VPN-like interface names
 			if strings.HasPrefix(name, "tun") ||
 				strings.HasPrefix(name, "tap") ||
 				strings.HasPrefix(name, "wg") ||
@@ -28,7 +36,8 @@ func detectVPNs() []VPNInfo {
 					Interface: name,
 				}
 
-				// Try to read the interface type
+				// type == 65534 is ARPHRD_NONE — used by TUN devices —
+				// so we annotate the name when we see it.
 				typeFile := filepath.Join("/sys/class/net", name, "type")
 				if data, err := os.ReadFile(typeFile); err == nil {
 					t := strings.TrimSpace(string(data))
@@ -42,7 +51,7 @@ func detectVPNs() []VPNInfo {
 		}
 	}
 
-	// Method 2: Check for VPN processes
+	// Method 2: running VPN client processes.
 	vpnProcesses := []string{
 		"openvpn", "wireguard", "wg-quick",
 		"nordvpnd", "expressvpn", "surfshark",

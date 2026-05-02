@@ -7,6 +7,7 @@ import (
 	"time"
 )
 
+// URL is one tracked URL with the result of its most recent check (if any).
 type URL struct {
 	ID        int    `json:"id"`
 	URL       string `json:"url"`
@@ -16,16 +17,20 @@ type URL struct {
 	UpdatedAt int64  `json:"updated_at"`
 }
 
+// AddURLRequest is the body accepted by POST /api/urlcheck/urls.
 type AddURLRequest struct {
 	URL string `json:"url"`
 }
 
+// CheckResult is the response payload from GET /api/urlcheck/check/{id}.
+// Status is 0 when the request failed before a status code was received.
 type CheckResult struct {
-	Status       int   `json:"status"`
-	ResponseTime int64 `json:"response_time"`
+	Status       int    `json:"status"`
+	ResponseTime int64  `json:"response_time"`
 	Error        string `json:"error,omitempty"`
 }
 
+// HistoryEntry is one row from urlcheck_history.
 type HistoryEntry struct {
 	ID           int    `json:"id"`
 	Status       int    `json:"status"`
@@ -34,6 +39,7 @@ type HistoryEntry struct {
 	CheckedAt    int64  `json:"checked_at"`
 }
 
+// handleListURLs returns all tracked URLs in newest-first order.
 func (m *Module) handleListURLs(w http.ResponseWriter, r *http.Request) {
 	db := m.p.DB()
 	rows, err := db.Query(`
@@ -61,6 +67,7 @@ func (m *Module) handleListURLs(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(urls)
 }
 
+// handleAddURL inserts a new URL record and returns its assigned ID.
 func (m *Module) handleAddURL(w http.ResponseWriter, r *http.Request) {
 	var req AddURLRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -89,6 +96,7 @@ func (m *Module) handleAddURL(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]int64{"id": id})
 }
 
+// handleDeleteURL removes a URL and (via FK cascade) its history.
 func (m *Module) handleDeleteURL(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	db := m.p.DB()
@@ -101,6 +109,9 @@ func (m *Module) handleDeleteURL(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
 }
 
+// handleCheckURL performs a synchronous HEAD request against the stored URL,
+// records the result in urlcheck_history, and updates the URL's last-known
+// status. Returns the CheckResult to the caller.
 func (m *Module) handleCheckURL(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("id")
 	id, err := strconv.Atoi(idStr)
@@ -157,6 +168,7 @@ func (m *Module) handleCheckURL(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(result)
 }
 
+// handleGetHistory returns the most recent 100 check results for a URL.
 func (m *Module) handleGetHistory(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("id")
 	id, err := strconv.Atoi(idStr)

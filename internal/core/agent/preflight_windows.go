@@ -9,16 +9,20 @@ import (
 	"strings"
 )
 
+// platformChecks returns the Windows-specific preflight checks:
+// availability of PowerShell (used by the collector and DNS configurator),
+// presence of the Npcap driver for packet capture, and a probe for
+// elevated/admin privileges.
 func platformChecks() []CheckResult {
 	var results []CheckResult
 
-	// 1. PowerShell — required for Get-NetTCPConnection
+	// PowerShell — required for Get-NetTCPConnection and DNS config.
 	results = append(results, checkPowerShell())
 
-	// 2. Npcap driver — needed for packet capture
+	// Npcap driver — needed for packet capture.
 	results = append(results, checkNpcap())
 
-	// 3. Admin / elevated privileges — needed for full connection info
+	// Admin / elevated privileges — needed for full connection info.
 	results = append(results, checkElevated())
 
 	return results
@@ -43,7 +47,8 @@ func checkPowerShell() CheckResult {
 }
 
 func checkNpcap() CheckResult {
-	// Check common install locations for Npcap
+	// Npcap may be reported either by its installed wpcap.dll or by
+	// the running service; try both before declaring it missing.
 	systemRoot := os.Getenv("SystemRoot")
 	if systemRoot == "" {
 		systemRoot = `C:\Windows`
@@ -59,7 +64,7 @@ func checkNpcap() CheckResult {
 		}
 	}
 
-	// Also check via sc query
+	// Also check via sc query in case the DLL location differs.
 	out, err := exec.Command("sc", "query", "npcap").Output()
 	if err == nil && strings.Contains(string(out), "RUNNING") {
 		return CheckResult{
@@ -79,7 +84,8 @@ func checkNpcap() CheckResult {
 }
 
 func checkElevated() CheckResult {
-	// Try opening a file that only admins can access
+	// Opening a raw physical drive succeeds only for Administrators;
+	// it is a cheap, dependency-free elevation probe on Windows.
 	_, err := os.Open(`\\.\PHYSICALDRIVE0`)
 	if err != nil {
 		return CheckResult{
