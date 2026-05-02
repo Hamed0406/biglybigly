@@ -206,6 +206,15 @@ func (c *Client) SendSysmon(ctx context.Context, snapshot interface{}) error {
 	return c.sendJSON(ctx, "/api/sysmon/ingest", payload)
 }
 
+// SendDNSLogs posts DNS query logs to the server
+func (c *Client) SendDNSLogs(ctx context.Context, queries interface{}) error {
+	payload := map[string]interface{}{
+		"agent":   c.agentName,
+		"queries": queries,
+	}
+	return c.sendJSON(ctx, "/api/dnsfilter/ingest", payload)
+}
+
 // Ping checks connectivity to the server by testing the ingest endpoint
 func (c *Client) Ping(ctx context.Context) error {
 	// First check basic server reachability

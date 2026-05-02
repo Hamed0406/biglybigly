@@ -17,6 +17,7 @@ import (
 	"github.com/hamed0406/biglybigly/internal/core/config"
 	"github.com/hamed0406/biglybigly/internal/core/storage"
 	"github.com/hamed0406/biglybigly/internal/platform"
+	"github.com/hamed0406/biglybigly/internal/tools/dnsfilter"
 	"github.com/hamed0406/biglybigly/internal/tools/netmon"
 	"github.com/hamed0406/biglybigly/internal/tools/sysmon"
 	"github.com/hamed0406/biglybigly/internal/tools/urlcheck"
@@ -94,6 +95,7 @@ func main() {
 		urlcheck.New(),
 		netmon.New(),
 		sysmon.New(),
+		dnsfilter.New(),
 	}
 
 	// Create registry
@@ -214,6 +216,56 @@ func runAgent(ctx context.Context, cancel context.CancelFunc, cfg *config.Config
 	// Start sysmon collector
 	sysCollector := sysmon.NewCollector(logger)
 	logger.Info("Agent started — collecting system metrics every 30s")
+
+	// Start DNS filter proxy
+	dnsBlocklist := dnsfilter.NewBlocklistManager(logger)
+	if err := dnsBlocklist.LoadFromDB(db); err != nil {
+		logger.Warn("Failed to load DNS blocklists", "err", err)
+	}
+	dnsProxy := dnsfilter.NewProxy("127.0.0.1:53", []string{"8.8.8.8:53", "1.1.1.1:53"}, dnsBlocklist, logger)
+
+	go func() {
+		if err := dnsProxy.Start(ctx); err != nil {
+			logger.Warn("DNS proxy failed to start (port 53 may require admin/root)", "err", err)
+		}
+	}()
+
+	// Periodically refresh blocklists (every 6 hours)
+	go func() {
+		ticker := time.NewTicker(6 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := dnsBlocklist.LoadFromDB(db); err != nil {
+					logger.Warn("Blocklist refresh failed", "err", err)
+				}
+			}
+		}
+	}()
+
+	// Ship DNS query logs to server every 30s
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				logs := dnsProxy.FlushLogs()
+				if len(logs) == 0 {
+					continue
+				}
+				logger.Info("Sending DNS query logs", "count", len(logs))
+				if err := client.SendDNSLogs(ctx, logs); err != nil {
+					logger.Warn("Failed to send DNS logs", "err", err)
+				}
+			}
+		}
+	}()
 
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)

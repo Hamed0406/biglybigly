@@ -7,7 +7,7 @@ COPY ui .
 RUN npm run build
 
 # Build Go binary (multi-arch aware)
-FROM golang:1.22-alpine AS go-builder
+FROM golang:1.24-alpine AS go-builder
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 ARG TARGETVARIANT
