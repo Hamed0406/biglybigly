@@ -209,6 +209,9 @@ func runAgent(ctx context.Context, cancel context.CancelFunc, cfg *config.Config
 		logger.Info("Server connection OK")
 	}
 
+	// Check for VPN/proxy that may interfere with DNS filtering
+	agent.DetectVPN(logger)
+
 	// Start collector
 	collector := netmon.NewCollectorWithLogger(logger)
 	logger.Info("Agent started — collecting network flows every 30s")
