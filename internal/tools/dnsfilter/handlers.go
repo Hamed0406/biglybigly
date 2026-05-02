@@ -378,9 +378,16 @@ func (m *Module) handleAddRule(w http.ResponseWriter, r *http.Request) {
 		req.Action = "block"
 	}
 
+	// Extract domain from URL if user pasted a full URL
+	domain := extractDomainFromInput(req.Domain)
+	if domain == "" {
+		http.Error(w, `{"error":"could not extract a valid domain"}`, http.StatusBadRequest)
+		return
+	}
+
 	now := time.Now().Unix()
 	_, err := db.Exec(`INSERT OR IGNORE INTO dnsfilter_custom_rules (domain, action, created_at) VALUES (?, ?, ?)`,
-		normalizeDomain(req.Domain), req.Action, now)
+		domain, req.Action, now)
 	if err != nil {
 		http.Error(w, `{"error":"database error"}`, http.StatusInternalServerError)
 		return

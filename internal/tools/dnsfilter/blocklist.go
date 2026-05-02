@@ -221,6 +221,35 @@ func normalizeDomain(d string) string {
 	return d
 }
 
+// extractDomainFromInput handles user input that might be a URL, domain, or domain with path.
+// Examples:
+//   "https://www.bbc.com/persian" → "www.bbc.com"
+//   "www.bbc.com/news"           → "www.bbc.com"
+//   "bbc.com"                    → "bbc.com"
+func extractDomainFromInput(input string) string {
+	input = strings.TrimSpace(input)
+
+	// Strip protocol
+	for _, prefix := range []string{"https://", "http://", "//", "dns://"} {
+		if strings.HasPrefix(strings.ToLower(input), prefix) {
+			input = input[len(prefix):]
+			break
+		}
+	}
+
+	// Strip path, query, fragment
+	if idx := strings.IndexAny(input, "/?#"); idx >= 0 {
+		input = input[:idx]
+	}
+
+	// Strip port
+	if idx := strings.LastIndex(input, ":"); idx >= 0 {
+		input = input[:idx]
+	}
+
+	return normalizeDomain(input)
+}
+
 // SyncRulesFromServer fetches custom rules and blocklists from the server
 // and merges them into the agent's local DB and in-memory blocklist.
 func (bm *BlocklistManager) SyncRulesFromServer(fetcher RuleFetcher, db *sql.DB, logger *slog.Logger) {
